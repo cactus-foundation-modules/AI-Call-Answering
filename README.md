@@ -42,6 +42,10 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 
 Calls from other agents in the same ElevenLabs workspace are ignored.
 
+### Fallback keys
+
+ElevenLabs credit runs out per account. Under **Settings > AI Call Answering > Assistant > Fallback ElevenLabs keys** you can add up to five keys from other ElevenLabs accounts. Press **Update the assistant** and each gets its own agent, tools and post-call webhook. A call goes to the main key first; if ElevenLabs refuses it (out of credit, over its limit, key rejected) or is too slow, the next key is tried, and a refused key is tried last for five minutes. If none connects, forwarding and voicemail take the call as before. Finished calls from any of the accounts are filed. The chosen voice must exist on every account.
+
 ## Costs
 
 ElevenLabs charges by the minute for conversations and Twilio charges for the call. The longest-call setting stops a runaway conversation.

@@ -12,8 +12,8 @@ export async function POST() {
   if (!(await hasPermission(user, 'ai-call-answering.manage'))) return errorResponse('Forbidden', 403)
 
   try {
-    const { agentId, created } = await provisionAssistant()
-    return NextResponse.json({ ok: true, agentId, created })
+    const { agentId, created, fallbackFailures } = await provisionAssistant()
+    return NextResponse.json({ ok: true, agentId, created, fallbackFailures })
   } catch (error) {
     if (error instanceof SetupError) return errorResponse(error.message, 400)
     console.error('[ai-call-answering] setup failed', error)

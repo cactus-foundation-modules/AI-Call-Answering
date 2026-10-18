@@ -3,6 +3,7 @@
 // no session, ElevenLabs is the caller.
 import { NextRequest, NextResponse, after } from 'next/server'
 import { announceConversationArrived } from '@/lib/conversations/arrived'
+import { listFallbackKeys, webhookSecrets } from '@/modules/ai-call-answering/lib/fallback-keys'
 import { getSettings } from '@/modules/ai-call-answering/lib/settings'
 import { ingestPostCall, parsePostCallPayload, verifySignature } from '@/modules/ai-call-answering/lib/post-call'
 
@@ -10,7 +11,10 @@ export async function POST(request: NextRequest) {
   // The raw text, not request.json(): the signature is over the exact bytes sent.
   const rawBody = await request.text()
   const settings = await getSettings()
-  if (!verifySignature(rawBody, request.headers.get('elevenlabs-signature'), settings.webhookSecret)) {
+  // Each ElevenLabs account (main key or fallback) signs with its own secret.
+  const secrets = webhookSecrets(settings, await listFallbackKeys())
+  const signature = request.headers.get('elevenlabs-signature')
+  if (!secrets.some((secret) => verifySignature(rawBody, signature, secret))) {
     return new NextResponse('Invalid signature', { status: 401 })
   }
 

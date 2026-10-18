@@ -269,13 +269,15 @@ export type RegisterCallInput = {
   fromNumber: string
   toNumber: string
   dynamicVariables: Record<string, string>
+  /** Defaults to REGISTER_CALL_TIMEOUT_MS; shorter when an earlier key has used some of the time. */
+  timeoutMs?: number
 }
 
 /** Registers a Twilio call with the agent and returns the TwiML that connects it. */
 export async function registerCall(apiKey: string, input: RegisterCallInput): Promise<string> {
   const response = await send(apiKey, '/v1/convai/twilio/register-call', {
     method: 'POST',
-    timeoutMs: REGISTER_CALL_TIMEOUT_MS,
+    timeoutMs: input.timeoutMs ?? REGISTER_CALL_TIMEOUT_MS,
     body: {
       agent_id: input.agentId,
       from_number: input.fromNumber,

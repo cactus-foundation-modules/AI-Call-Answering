@@ -5,7 +5,8 @@ import { getSiteUrl } from '@/lib/config/env'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { assistantNeedsSetup, postCallWebhookUrl } from '@/modules/ai-call-answering/lib/agent-sync'
+import { assistantNeedsSetup, fallbackNeedsSetup, postCallWebhookUrl } from '@/modules/ai-call-answering/lib/agent-sync'
+import { MAX_FALLBACK_KEYS, listFallbackKeys } from '@/modules/ai-call-answering/lib/fallback-keys'
 import {
   LANGUAGE_CHOICES,
   LLM_CHOICES,
@@ -25,6 +26,7 @@ async function guard() {
 async function currentState() {
   const settings = await getSettings()
   const siteUrl = getSiteUrl()
+  const fallbacks = await listFallbackKeys()
   return {
     enabled: settings.enabled,
     // The key itself never goes back to the browser - only whether there is one.
@@ -40,7 +42,15 @@ async function currentState() {
     maxCallMinutes: settings.maxCallMinutes,
     agentId: settings.agentId,
     isSetUp: !!settings.agentId,
-    needsSetup: assistantNeedsSetup(settings, siteUrl),
+    needsSetup: assistantNeedsSetup(settings, siteUrl) || fallbacks.some((f) => fallbackNeedsSetup(settings, f, siteUrl)),
+    // Never the keys themselves.
+    fallbackKeys: fallbacks.map((f) => ({
+      id: f.id,
+      label: f.label,
+      isSetUp: !!f.agentId,
+      needsSetup: fallbackNeedsSetup(settings, f, siteUrl),
+    })),
+    maxFallbackKeys: MAX_FALLBACK_KEYS,
     syncedAt: settings.syncedAt ? settings.syncedAt.toISOString() : null,
     webhookUrl: postCallWebhookUrl(siteUrl),
     ttsModels: TTS_MODEL_CHOICES,

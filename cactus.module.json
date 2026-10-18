@@ -1,6 +1,6 @@
 {
   "name": "ai-call-answering",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "tablePrefix": "acall_",
   "notificationKinds": [
     {"id": "callback", "label": "Callback requests from the phone assistant", "description": "The phone assistant could not help a caller and took their name and email so somebody can get back to them.", "dedupePrefix": "ai-call-answering:callback:"}
@@ -69,6 +69,7 @@
   },
   "teardown": [
     "acall_calls",
+    "acall_fallback_keys",
     "acall_numbers",
     "acall_settings"
   ],

@@ -20,6 +20,7 @@ import { VoicePicker, type Voice } from './VoicePicker'
 
 const SETTINGS_API = '/api/m/ai-call-answering/admin/settings'
 const SYNC_API = '/api/m/ai-call-answering/admin/sync'
+const FALLBACK_KEYS_API = '/api/m/ai-call-answering/admin/fallback-keys'
 const VOICES_API = '/api/m/ai-call-answering/admin/voices'
 const NUMBERS_API = '/api/m/ai-call-answering/admin/numbers'
 const CALLS_API = '/api/m/ai-call-answering/admin/calls'
@@ -47,6 +48,8 @@ type State = {
   llms: Choice[]
   languages: Choice[]
   maxCallMinutesLimit: number
+  fallbackKeys: Array<{ id: string; label: string; isSetUp: boolean; needsSetup: boolean }>
+  maxFallbackKeys: number
 }
 
 type Draft = {
@@ -120,6 +123,8 @@ function AssistantSection() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const [fallbackLabel, setFallbackLabel] = useState('')
+  const [fallbackKey, setFallbackKey] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -214,8 +219,44 @@ function AssistantSection() {
       setErr(await readError(res, 'Setting the assistant up failed.'))
       return null
     }
+    const result = await res.json().catch(() => null) as { fallbackFailures?: Array<{ label: string; message: string }> } | null
     await load()
+    const failures = result?.fallbackFailures ?? []
+    if (failures.length > 0) {
+      setErr(`The main assistant is set up, but ${failures.map((f) => `${f.label}: ${f.message}`).join(' ')}`)
+      return null
+    }
     return 'The assistant is set up with these settings.'
+  })
+
+  const addFallback = () => run(async () => {
+    const res = await fetch(FALLBACK_KEYS_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: fallbackLabel, apiKey: fallbackKey }),
+    })
+    if (!res.ok) {
+      setErr(await readError(res, 'Could not add that key.'))
+      return null
+    }
+    setFallbackLabel('')
+    setFallbackKey('')
+    await load()
+    return 'Key added. Press Update the assistant to get it ready.'
+  })
+
+  const removeFallback = (id: string) => run(async () => {
+    const res = await fetch(FALLBACK_KEYS_API, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    if (!res.ok) {
+      setErr(await readError(res, 'Could not remove that key.'))
+      return null
+    }
+    await load()
+    return 'Key removed.'
   })
 
   const toggle = (enabled: boolean) => run(async () => {
@@ -297,6 +338,53 @@ function AssistantSection() {
                 )}
               </p>
             </div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-title">
+            Fallback ElevenLabs keys
+            <InfoTip>
+              ElevenLabs credit is used up per account. If the main key is refused (out of credit, over its limit or no
+              longer valid), each call is offered to these keys in turn, in the order listed. Each key should belong to
+              a different ElevenLabs account, and each gets its own assistant made by Set up the assistant.
+            </InfoTip>
+          </div>
+          {saved.fallbackKeys.length === 0 ? (
+            <p className="field-hint">None yet. The assistant uses the main key only.</p>
+          ) : (
+            <ol style={{ paddingLeft: '1.25rem', margin: '0 0 0.75rem' }}>
+              {saved.fallbackKeys.map((key, index) => (
+                <li key={key.id} style={{ marginBottom: '0.35rem' }}>
+                  <strong>{key.label || `Fallback key ${index + 1}`}</strong>
+                  {' - '}
+                  {!key.isSetUp ? 'not set up yet' : key.needsSetup ? 'set up, but settings have changed since' : 'ready'}
+                  {' '}
+                  <button type="button" className="btn btn-link btn-sm" disabled={busy} onClick={() => { void removeFallback(key.id) }}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+          {saved.fallbackKeys.length < saved.maxFallbackKeys && (
+            <>
+              <div className="field">
+                <label>Name (so you can tell them apart)</label>
+                <input type="text" value={fallbackLabel} maxLength={60} placeholder="e.g. Second account" onChange={(e) => setFallbackLabel(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Fallback API key</label>
+                <input type="password" autoComplete="off" value={fallbackKey} placeholder="Paste the key here" onChange={(e) => setFallbackKey(e.target.value)} />
+                <p className="field-hint">
+                  Same permissions as the main key. It is stored encrypted and never shown again. The voice chosen below
+                  has to exist on that account too; a voice from the shared library must be added to it first.
+                </p>
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={addFallback} disabled={busy || !fallbackKey.trim() || !saved.hasApiKey}>
+                Add fallback key
+              </button>
+            </>
           )}
         </div>
 

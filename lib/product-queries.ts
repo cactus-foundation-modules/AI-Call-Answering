@@ -13,6 +13,7 @@ import { getProductFaqCategoryChain } from '@/modules/shop/lib/db/catalogue'
 import { normaliseFaqSet } from '@/modules/shop/lib/faq'
 import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries'
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
+import { describeForecast, loadDeliveryForecast, type SpokenDeliveryService } from './delivery-forecast'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
 
 // ---------------------------------------------------------------------------
@@ -189,6 +190,10 @@ export type ProductDetail = ProductSummary & {
   /** Every delivery service the shop offers this product, as the product page
    *  shows them. Empty when the shop publishes no delivery timing. */
   deliveryServices: DeliveryService[]
+  /** The same services worked out variation by variation, with real dates, for a
+   *  product whose delivery depends on which variation is bought. Takes
+   *  precedence over `deliveryServices` when present. */
+  deliveryByVariation: SpokenDeliveryService[]
   deliveryNote: string
   priceNote: string
 }
@@ -280,14 +285,16 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
   if (!row) return null
 
   const config = await getShopConfigCached()
-  const [options, priceRange, specifications, deliveryServices, questionsAnswered] = await Promise.all([
+  const [options, priceRange, specifications, deliveryServices, forecast, questionsAnswered] = await Promise.all([
     loadOptions(productId),
     loadVariationPrices(productId, config.currencySymbol),
     loadSpecifications(productId),
     loadDeliveryServices(productId, config.currencySymbol),
+    loadDeliveryForecast(productId),
     loadProductFaqs(productId, row.faqs),
   ])
   const weight = numberOrNull(row.weight)
+  const deliveryByVariation = forecast ? describeForecast(forecast, config.currencySymbol, config.taxMode) : []
 
   return {
     ...toSummary(row, config.currencySymbol),
@@ -300,10 +307,13 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
     priceRange: options.length > 0 ? priceRange : null,
     specifications,
     questionsAnswered,
-    deliveryServices,
-    deliveryNote: deliveryServices.length > 0
-      ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
-      : 'No delivery timing is published for this product. Do not guess one; offer a callback.',
+    deliveryServices: deliveryByVariation.length > 0 ? [] : deliveryServices,
+    deliveryByVariation,
+    deliveryNote: deliveryByVariation.length > 0
+      ? `Dates are the earliest delivery if ordered today (${forecast?.today}) and prices are ${priceBasis(config.taxMode)}. Each line names which options it applies to: tell the caller which options arrive soonest and what the others get. If they have not said which option they want, give the soonest and say the rest are later.`
+      : deliveryServices.length > 0
+        ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
+        : 'No delivery timing is published for this product. Do not guess one; offer a callback.',
     priceNote: `Prices are ${priceBasis(config.taxMode)}.`,
   }
 }

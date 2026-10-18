@@ -7,6 +7,7 @@ import {
   linkConversation,
   type TranscriptTurn,
 } from './calls'
+import { knownAgentIds, listFallbackKeys } from './fallback-keys'
 import { getSettings } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -118,7 +119,8 @@ export async function ingestPostCall(payload: PostCallPayloadType): Promise<Inge
   if (payload.type !== 'post_call_transcription') return { status: 'ignored', reason: 'not a transcript' }
   const { data } = payload
   const settings = await getSettings()
-  if (!settings.agentId || data.agent_id !== settings.agentId) return { status: 'ignored', reason: 'another agent' }
+  const agentIds = knownAgentIds(settings, await listFallbackKeys())
+  if (!agentIds.includes(data.agent_id)) return { status: 'ignored', reason: 'another agent' }
 
   const variables = data.conversation_initiation_client_data?.dynamic_variables
   const callSid =

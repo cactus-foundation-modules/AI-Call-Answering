@@ -10,6 +10,12 @@ import {
   updateTool,
 } from './elevenlabs'
 import { TOOL_NAMES, buildAgentBody, buildToolConfig, configHash, type AgentInputs } from './agent-config'
+import {
+  listFallbackKeys,
+  saveFallbackProvisioned,
+  saveFallbackWebhook,
+  type FallbackKey,
+} from './fallback-keys'
 import { getSettings, saveProvisionedState, saveWebhook, type AiCallSettings } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -58,6 +64,13 @@ export function assistantNeedsSetup(settings: AiCallSettings, siteUrl: string): 
   return configHash(current) !== settings.syncedHash
 }
 
+/** The same question for one fallback key. */
+export function fallbackNeedsSetup(settings: AiCallSettings, fallback: FallbackKey, siteUrl: string): boolean {
+  if (!fallback.agentId || !fallback.postCallWebhookId || !settings.toolsToken) return true
+  const current = agentInputsFrom(settings, siteUrl, settings.toolsToken, fallback.toolIds, fallback.postCallWebhookId)
+  return configHash(current) !== fallback.syncedHash
+}
+
 async function upsertTool(apiKey: string, existingId: string | undefined, config: Record<string, unknown>): Promise<string> {
   if (existingId) {
     try {
@@ -71,53 +84,104 @@ async function upsertTool(apiKey: string, existingId: string | undefined, config
   return createTool(apiKey, config)
 }
 
-export async function provisionAssistant(): Promise<{ agentId: string; created: boolean }> {
+/** What one ElevenLabs account needs to answer calls, made or brought up to date.
+ *  The webhook secret is passed to `keepSecret` the moment it is handed over,
+ *  because it is shown once. */
+async function provisionAccount(
+  apiKey: string,
+  settings: AiCallSettings,
+  siteUrl: string,
+  toolsToken: string,
+  existing: { webhookId: string | null; toolIds: Record<string, string>; agentId: string | null },
+  keepSecret: (webhookId: string, secret: string) => Promise<void>,
+): Promise<{ agentId: string; created: boolean; webhookId: string; webhookSecret: string | null; toolIds: Record<string, string>; syncedHash: string }> {
+  let webhookId = existing.webhookId
+  let webhookSecret: string | null = null
+  if (!webhookId) {
+    const webhook = await createPostCallWebhook(apiKey, 'Cactus call answering', postCallWebhookUrl(siteUrl))
+    webhookId = webhook.id
+    webhookSecret = webhook.secret
+    if (!webhookSecret) throw new SetupError('ElevenLabs made the webhook but did not give back its signing secret.')
+    await keepSecret(webhookId, webhookSecret)
+  }
+
+  const toolIds: Record<string, string> = {}
+  for (const name of TOOL_NAMES) {
+    toolIds[name] = await upsertTool(apiKey, existing.toolIds[name], buildToolConfig(name, siteUrl, toolsToken))
+  }
+
+  const inputs = agentInputsFrom(settings, siteUrl, toolsToken, toolIds, webhookId)
+  const body = buildAgentBody(inputs)
+  let agentId = existing.agentId
+  let created = false
+  if (agentId && (await agentExists(apiKey, agentId))) {
+    await updateAgent(apiKey, agentId, body)
+  } else {
+    agentId = await createAgent(apiKey, body)
+    created = true
+  }
+  return { agentId, created, webhookId, webhookSecret, toolIds, syncedHash: configHash(inputs) }
+}
+
+export type FallbackFailure = { label: string; message: string }
+
+export async function provisionAssistant(): Promise<{ agentId: string; created: boolean; fallbackFailures: FallbackFailure[] }> {
   const settings = await getSettings()
   if (!settings.apiKey) throw new SetupError('Add your ElevenLabs API key first.')
   if (!settings.voiceId) throw new SetupError('Choose a voice first.')
   const apiKey = settings.apiKey
   const siteUrl = getSiteUrl()
 
+  let main
+  const toolsToken = settings.toolsToken ?? randomBytes(32).toString('hex')
   try {
-    let webhookId = settings.postCallWebhookId
-    let webhookSecret: string | null = null
-    if (!webhookId) {
-      const webhook = await createPostCallWebhook(apiKey, 'Cactus call answering', postCallWebhookUrl(siteUrl))
-      webhookId = webhook.id
-      webhookSecret = webhook.secret
-      if (!webhookSecret) throw new SetupError('ElevenLabs made the webhook but did not give back its signing secret.')
-      await saveWebhook(webhookId, webhookSecret)
-    }
-
-    const toolsToken = settings.toolsToken ?? randomBytes(32).toString('hex')
-    const toolIds: Record<string, string> = {}
-    for (const name of TOOL_NAMES) {
-      toolIds[name] = await upsertTool(apiKey, settings.toolIds[name], buildToolConfig(name, siteUrl, toolsToken))
-    }
-
-    const inputs = agentInputsFrom(settings, siteUrl, toolsToken, toolIds, webhookId)
-    const body = buildAgentBody(inputs)
-    let agentId = settings.agentId
-    let created = false
-    if (agentId && (await agentExists(apiKey, agentId))) {
-      await updateAgent(apiKey, agentId, body)
-    } else {
-      agentId = await createAgent(apiKey, body)
-      created = true
-    }
-
-    await saveProvisionedState({
-      agentId,
-      postCallWebhookId: webhookId,
-      webhookSecret,
+    main = await provisionAccount(
+      apiKey,
+      settings,
+      siteUrl,
       toolsToken,
-      toolIds,
-      syncedHash: configHash(inputs),
+      { webhookId: settings.postCallWebhookId, toolIds: settings.toolIds, agentId: settings.agentId },
+      saveWebhook,
+    )
+    await saveProvisionedState({
+      agentId: main.agentId,
+      postCallWebhookId: main.webhookId,
+      webhookSecret: main.webhookSecret,
+      toolsToken,
+      toolIds: main.toolIds,
+      syncedHash: main.syncedHash,
     })
-    return { agentId, created }
   } catch (error) {
     if (error instanceof SetupError) throw error
     if (error instanceof ElevenLabsError) throw new SetupError(error.message)
     throw error
   }
+
+  // The fallbacks share the tools token just saved. One failing (a key out of
+  // credit, a voice that account does not have) must not undo the main key's
+  // setup, so each reports for itself.
+  const fallbackFailures: FallbackFailure[] = []
+  for (const [index, fallback] of (await listFallbackKeys()).entries()) {
+    const label = fallback.label || `Fallback key ${index + 1}`
+    if (!fallback.apiKey) {
+      fallbackFailures.push({ label, message: 'The saved key cannot be read. Remove it and add it again.' })
+      continue
+    }
+    try {
+      const done = await provisionAccount(
+        fallback.apiKey,
+        settings,
+        siteUrl,
+        toolsToken,
+        { webhookId: fallback.postCallWebhookId, toolIds: fallback.toolIds, agentId: fallback.agentId },
+        (webhookId, secret) => saveFallbackWebhook(fallback.id, webhookId, secret),
+      )
+      await saveFallbackProvisioned(fallback.id, { agentId: done.agentId, toolIds: done.toolIds, syncedHash: done.syncedHash })
+    } catch (error) {
+      const message = error instanceof SetupError || error instanceof ElevenLabsError ? error.message : 'Setting this key up failed. Check the logs.'
+      if (!(error instanceof SetupError || error instanceof ElevenLabsError)) console.error('[ai-call-answering] fallback setup failed', error)
+      fallbackFailures.push({ label, message })
+    }
+  }
+  return { agentId: main.agentId, created: main.created, fallbackFailures }
 }

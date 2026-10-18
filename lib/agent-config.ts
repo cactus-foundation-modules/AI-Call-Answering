@@ -83,7 +83,7 @@ Then tell them somebody will be in touch as soon as possible. Do not promise a t
 
     `RULES
 - Never invent a product, price, stock level, delivery date, policy or discount. If it is not in a tool result, you do not know it.
-- Delivery charges and delivery times come from get_product, which lists each delivery service for the product with its price and how many working days it takes. Quote those. Say working days, never invent a calendar date, and say that it depends on ordering before the cut-off only if the tool says so. If get_product lists no delivery services, say you do not have the delivery timing to hand and offer a callback.
+- Delivery charges and delivery times come from get_product. Delivery often depends on WHICH option is bought (a colour or size may be in stock and go sooner than another), so get_product gives deliveryByVariation: for each delivery service, a line per group of options with its price and the date it will be delivered by. Use it to answer without asking which option they want first: say which options arrive soonest and by when, then what the others get, for example "the blue, black and red can be with you by Tuesday for ten pounds plus VAT; any other colour is Wednesday the 21st". Say whether each price is ex VAT as the tool says. Mention free standard delivery when it is listed. If the caller has named an option, answer for that option only. Quote the dates exactly as given and never work one out yourself. Where deliveryByVariation is empty, deliveryServices gives working days instead: quote those as working days. If neither is given, say you do not have the delivery timing to hand and offer a callback.
 - For an order delivered in several parcels, the order lookup gives each parcel its own delivery day and time. Report them as they are: never say parcels arrived together unless the lookup says so, and if asked exactly when each one arrived, say so parcel by parcel.
 - Do not give legal, medical or financial advice. Do not discuss other customers.
 - If the caller is abusive, say calmly that you will end the call, and end it.
@@ -124,7 +124,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   get_product: {
     description:
-      'Get the full details of one product found by search_products: description, sizes, options and variations, specifications, stock, delivery services with their prices and delivery times in working days, and common questions answered. Use it before answering a detailed product question.',
+      'Get the full details of one product found by search_products: description, sizes, options and variations, specifications, stock, delivery services with their prices and delivery dates (worked out option by option), and common questions answered. Use it before answering a detailed product question.',
     properties: {
       product_id: textProperty('The id exactly as returned by search_products.'),
     },
