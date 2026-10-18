@@ -1,5 +1,4 @@
 import { Prisma } from '@prisma/client'
-import { z } from 'zod'
 import { prisma } from '@/lib/db/prisma'
 import { getShopConfigCached } from '@/modules/shop/lib/config'
 import {
@@ -10,6 +9,9 @@ import {
   stockSummary,
 } from './product-format'
 import { resolveProductDeliveryOptions } from '@/modules/shop/lib/detail-delivery'
+import { getProductFaqCategoryChain } from '@/modules/shop/lib/db/catalogue'
+import { normaliseFaqSet } from '@/modules/shop/lib/faq'
+import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries'
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
 
@@ -28,7 +30,6 @@ import { escapeLike, plainText, searchTokens, truncate } from './text'
 
 const SEARCH_LIMIT = 6
 const DESCRIPTION_CHARS = 900
-const FAQ_LIMIT = 8
 
 const VISIBLE = Prisma.sql`p."status" = 'ACTIVE' AND p."catalogue_hidden" = false AND p."parts_only" = false`
 
@@ -152,9 +153,14 @@ export async function searchProducts(query: string, maxPrice: number | null): Pr
   }
 }
 
-const FaqShape = z.object({
-  items: z.array(z.object({ question: z.string(), answer: z.string() })).default([]),
-}).passthrough()
+/** The questions this product's page prints: its own, its category chain's and
+ *  the shop-wide ones, nearest answer winning. None when the shop has FAQs off. */
+async function loadProductFaqs(productId: string, own: unknown): Promise<Array<{ question: string; answer: string }>> {
+  const shop = await loadShopWideFaqs()
+  if (!shop.enabled) return []
+  const categories = await getProductFaqCategoryChain(productId)
+  return toSpokenFaqs(resolveForProduct(normaliseFaqSet(own), categories, shop.items))
+}
 
 type DetailRow = ProductRow & {
   description: string | null
@@ -274,13 +280,13 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
   if (!row) return null
 
   const config = await getShopConfigCached()
-  const [options, priceRange, specifications, deliveryServices] = await Promise.all([
+  const [options, priceRange, specifications, deliveryServices, questionsAnswered] = await Promise.all([
     loadOptions(productId),
     loadVariationPrices(productId, config.currencySymbol),
     loadSpecifications(productId),
     loadDeliveryServices(productId, config.currencySymbol),
+    loadProductFaqs(productId, row.faqs),
   ])
-  const faqs = FaqShape.safeParse(row.faqs)
   const weight = numberOrNull(row.weight)
 
   return {
@@ -293,9 +299,7 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
     options,
     priceRange: options.length > 0 ? priceRange : null,
     specifications,
-    questionsAnswered: faqs.success
-      ? faqs.data.items.slice(0, FAQ_LIMIT).map((item) => ({ question: plainText(item.question), answer: truncate(plainText(item.answer), 300) }))
-      : [],
+    questionsAnswered,
     deliveryServices,
     deliveryNote: deliveryServices.length > 0
       ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
