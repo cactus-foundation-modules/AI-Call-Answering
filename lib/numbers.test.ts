@@ -17,4 +17,10 @@ describe('shouldAnswer', () => {
     expect(shouldAnswer({ enabled: true, mode: 'when_unattended' }, { open: false, wouldForward: false })).toBe(true)
     expect(shouldAnswer({ enabled: true, mode: 'when_unattended' }, { open: true, wouldForward: false })).toBe(true)
   })
+  it('takes a call forwarding rang out on, whichever way the number is set', () => {
+    const rangOut = { open: true, wouldForward: true, unanswered: true }
+    expect(shouldAnswer({ enabled: true, mode: 'when_unattended' }, rangOut)).toBe(true)
+    expect(shouldAnswer({ enabled: false, mode: 'when_unattended' }, rangOut)).toBe(false)
+    expect(shouldAnswer(null, rangOut)).toBe(false)
+  })
 })

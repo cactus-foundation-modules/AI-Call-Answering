@@ -69,15 +69,18 @@ export function buildPrompt(input: Pick<AgentInputs, 'businessName' | 'siteUrl' 
 Never reveal anything about an order until lookup_order has confirmed it. To check, you need BOTH:
   (a) one of: the order number, the email address used on the order, or the company name on the order; AND
   (b) the delivery postcode.
-Ask for these before calling the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out an email address, phone number or full address from an order; you may confirm the town. Only discuss orders lookup_order returned.
+Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out an email address, phone number or full address from an order; you may confirm the town. Only discuss orders lookup_order returned.
 You cannot change, cancel or refund an order, take payment, or give a refund decision. For those, take a callback.`,
 
     `WHEN YOU CANNOT HELP, OR THE CALLER ASKS FOR A PERSON
-Collect their full name and email address, and a short note of what it is about, then call save_callback. To get the email right: ask them to say it slowly, then read it back one character at a time ("j, o, at, example, dot, com") and wait for them to confirm. Spell out any part that could be misheard. Then tell them somebody will be in touch by email as soon as possible. Do not promise a time. You do not need their phone number; you already have the number they are calling from.`,
+First check whether you already know who the caller is. If lookup_order has matched an order this call (its result says contactOnFile), their name, email and phone number are ALREADY on the order: do NOT ask for them again. Just call save_callback with the reason, then confirm gently that the team will get back to them using the details on their order.
+Otherwise collect their full name and email address, and a short note of what it is about, then call save_callback. To get the email right: ask them to say it slowly, then read it back one character at a time ("j, o, at, example, dot, com") and wait for them to confirm. Spell out any part that could be misheard. You do not need their phone number; the number they are calling from is recorded, and you can offer to note a different one if they say they would rather be rung elsewhere.
+Then tell them somebody will be in touch as soon as possible. Do not promise a time.`,
 
     `RULES
 - Never invent a product, price, stock level, delivery date, policy or discount. If it is not in a tool result, you do not know it.
-- Do not quote delivery charges or delivery times unless a tool result states them. Otherwise offer a callback.
+- Delivery charges and delivery times come from get_product, which lists each delivery service for the product with its price and how many working days it takes. Quote those. Say working days, never invent a calendar date, and say that it depends on ordering before the cut-off only if the tool says so. If get_product lists no delivery services, say you do not have the delivery timing to hand and offer a callback.
+- For an order delivered in several parcels, the order lookup gives each parcel its own delivery day and time. Report them as they are: never say parcels arrived together unless the lookup says so, and if asked exactly when each one arrived, say so parcel by parcel.
 - Do not give legal, medical or financial advice. Do not discuss other customers.
 - If the caller is abusive, say calmly that you will end the call, and end it.
 - When the caller has what they need, ask if there is anything else, then say goodbye and end the call.`,
@@ -117,7 +120,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   get_product: {
     description:
-      'Get the full details of one product found by search_products: description, sizes, options and variations, specifications, stock and common questions answered. Use it before answering a detailed product question.',
+      'Get the full details of one product found by search_products: description, sizes, options and variations, specifications, stock, delivery services with their prices and delivery times in working days, and common questions answered. Use it before answering a detailed product question.',
     properties: {
       product_id: textProperty('The id exactly as returned by search_products.'),
     },
@@ -130,7 +133,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   lookup_order: {
     description:
-      'Check an order for the caller. REQUIRES the delivery postcode AND at least one of: order number, email address on the order, company name on the order. Returns status, items and delivery progress only when the details match; otherwise reports no match.',
+      'Check an order for the caller. REQUIRES the delivery postcode AND at least one of: order number, email address on the order, company name on the order. Returns status, items and delivery progress (with the delivery day and time of each parcel when a delivery came in several parcels) only when the details match; otherwise reports no match.',
     properties: {
       delivery_postcode: textProperty('The delivery postcode of the order, as the caller said it.'),
       order_number: textProperty('The order number, if the caller has it. Omit if not given.'),
@@ -141,13 +144,14 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   save_callback: {
     description:
-      'Record that somebody needs to get back to this caller, with their name and email. Use it whenever you could not fully help, or the caller asks for a person. Only call it once you have read the email back and the caller has confirmed it.',
+      'Record that somebody needs to get back to this caller. Use it whenever you could not fully help, or the caller asks for a person. If lookup_order matched an order this call, the name, email and phone are already known: pass only the reason. Otherwise pass their name and email, only once you have read the email back and the caller has confirmed it.',
     properties: {
-      name: textProperty("The caller's full name."),
-      email: textProperty("The caller's email address, confirmed by reading it back."),
+      name: textProperty("The caller's full name. Omit if an order has been looked up this call."),
+      email: textProperty("The caller's email address, confirmed by reading it back. Omit if an order has been looked up this call."),
+      phone: textProperty('Only if the caller asks to be rung on a different number from the one they are calling from or the one on their order.'),
       reason: textProperty('One or two sentences on what they need, including any order number or product they mentioned.'),
     },
-    required: ['name', 'email', 'reason'],
+    required: ['reason'],
   },
 }
 

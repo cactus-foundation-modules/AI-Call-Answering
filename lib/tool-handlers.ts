@@ -6,6 +6,7 @@ import {
   recentFailedChecksFrom,
   recordCallback,
   recordFailedOrderCheck,
+  recordVerifiedContact,
   recordVerifiedOrder,
   callerLabel,
   type CallRecord,
@@ -48,8 +49,9 @@ const OrderInput = CallIdentity.extend({
   company_name: z.string().trim().max(160).optional(),
 })
 const CallbackInput = CallIdentity.extend({
-  name: z.string().trim().min(1).max(120),
-  email: z.string().trim().min(1).max(320),
+  name: z.string().trim().max(120).optional(),
+  email: z.string().trim().max(320).optional(),
+  phone: z.string().trim().max(40).optional(),
   reason: z.string().trim().min(1).max(1000),
 })
 
@@ -102,7 +104,25 @@ async function runOrderLookup(input: z.infer<typeof OrderInput>): Promise<ToolRe
     return { ok: false, matched: false, message: 'No order matches those details. Ask them to double-check and try once more. Do not say which part was wrong.' }
   }
   for (const orderNumber of outcome.internalNumbers) await recordVerifiedOrder(call.id, orderNumber)
-  return { ok: true, matched: true, orders: outcome.orders }
+  await recordVerifiedContact(call.id, outcome.contact)
+  const contactOnFile = !!outcome.contact && outcome.contact.email !== ''
+  return {
+    ok: true,
+    matched: true,
+    orders: outcome.orders,
+    contactOnFile,
+    note: contactOnFile
+      ? 'This caller\'s name, email and phone number are already on the order. If you need to arrange a callback, do not ask for them again: call save_callback with just the reason.'
+      : 'The order has no usable contact details, so a callback will need the caller\'s name and email.',
+  }
+}
+
+/** A number worth ringing back: the one on the verified order, else the one
+ *  the caller rang from if it is a real number rather than withheld. */
+function callbackPhone(call: CallRecord, given: string | undefined): string {
+  if (given?.trim()) return given.trim()
+  if (call.verifiedContact.phone) return call.verifiedContact.phone
+  return /^\+\d{6,}$/.test(call.fromNumber) ? call.fromNumber : ''
 }
 
 async function runSaveCallback(input: z.infer<typeof CallbackInput>): Promise<ToolOutcome> {
@@ -110,12 +130,23 @@ async function runSaveCallback(input: z.infer<typeof CallbackInput>): Promise<To
   if (!call) {
     return { result: { ok: false, message: 'There is no live call to attach that to. Say somebody will be in touch only if you are sure; otherwise apologise.' }, callbackSaved: null }
   }
-  if (!isPlausibleEmail(input.email)) {
-    return { result: { ok: false, message: 'That email address does not look right. Ask them to say it again slowly, read it back, and retry.' }, callbackSaved: null }
+  // Details the caller proved by verifying an order are the order's own. A name
+  // or email given aloud wins when there is one (they may want a different
+  // address), but none is needed when the order already holds them.
+  const name = blankToNull(input.name) ?? blankToNull(call.verifiedContact.name)
+  const email = blankToNull(input.email) ?? blankToNull(call.verifiedContact.email)
+  if (!name) {
+    return { result: { ok: false, message: 'I still need the caller\'s full name for the callback. Ask for it and retry.' }, callbackSaved: null }
   }
-  await recordCallback(call.id, { name: input.name, email: input.email.toLowerCase(), reason: input.reason })
+  if (!email || !isPlausibleEmail(email)) {
+    const message = input.email
+      ? 'That email address does not look right. Ask them to say it again slowly, read it back, and retry.'
+      : 'I still need an email address for the callback. Ask for it, read it back, and retry.'
+    return { result: { ok: false, message }, callbackSaved: null }
+  }
+  await recordCallback(call.id, { name, email: email.toLowerCase(), phone: callbackPhone(call, input.phone), reason: input.reason })
   const saved = await findCall({ callSid: call.callSid })
-  return { result: { ok: true, message: 'Saved. Tell the caller somebody will be in touch by email as soon as they can. Do not promise a time.' }, callbackSaved: saved }
+  return { result: { ok: true, message: 'Saved. Tell the caller somebody will be in touch as soon as they can. Do not promise a time.' }, callbackSaved: saved }
 }
 
 /** Raises the admin notification for a saved callback. Called after the tool's

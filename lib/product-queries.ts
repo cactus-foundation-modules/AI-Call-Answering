@@ -9,6 +9,8 @@ import {
   priceBasis,
   stockSummary,
 } from './product-format'
+import { resolveProductDeliveryOptions } from '@/modules/shop/lib/detail-delivery'
+import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
 
 // ---------------------------------------------------------------------------
@@ -178,7 +180,30 @@ export type ProductDetail = ProductSummary & {
   priceRange: string | null
   specifications: Array<{ name: string; values: string[] }>
   questionsAnswered: Array<{ question: string; answer: string }>
+  /** Every delivery service the shop offers this product, as the product page
+   *  shows them. Empty when the shop publishes no delivery timing. */
+  deliveryServices: DeliveryService[]
+  deliveryNote: string
   priceNote: string
+}
+
+export type DeliveryService = DeliveryTimingWords & {
+  service: string
+  note: string | null
+  price: string
+}
+
+/** The delivery services for a product, read through shop's own seam from
+ *  whichever module publishes delivery timing - the same figures the product
+ *  page shows. A shop without one simply has none. */
+async function loadDeliveryServices(productId: string, symbol: string): Promise<DeliveryService[]> {
+  const options = await resolveProductDeliveryOptions(productId)
+  return options.map((option) => ({
+    service: option.label,
+    note: option.description ? truncate(plainText(option.description), 200) : null,
+    price: option.price === 0 ? 'free' : formatPrice(option.price, symbol),
+    ...describeDeliveryTiming(option.handlingDays, option.transitDays),
+  }))
 }
 
 async function loadOptions(productId: string): Promise<Array<{ name: string; values: string[] }>> {
@@ -249,10 +274,11 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
   if (!row) return null
 
   const config = await getShopConfigCached()
-  const [options, priceRange, specifications] = await Promise.all([
+  const [options, priceRange, specifications, deliveryServices] = await Promise.all([
     loadOptions(productId),
     loadVariationPrices(productId, config.currencySymbol),
     loadSpecifications(productId),
+    loadDeliveryServices(productId, config.currencySymbol),
   ])
   const faqs = FaqShape.safeParse(row.faqs)
   const weight = numberOrNull(row.weight)
@@ -270,6 +296,10 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
     questionsAnswered: faqs.success
       ? faqs.data.items.slice(0, FAQ_LIMIT).map((item) => ({ question: plainText(item.question), answer: truncate(plainText(item.answer), 300) }))
       : [],
+    deliveryServices,
+    deliveryNote: deliveryServices.length > 0
+      ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
+      : 'No delivery timing is published for this product. Do not guess one; offer a callback.',
     priceNote: `Prices are ${priceBasis(config.taxMode)}.`,
   }
 }

@@ -9,6 +9,10 @@ import {
   type OrderClaim,
   type OrderIdentity,
 } from './order-verify'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
+import { parseConsignmentParcels } from '@/modules/shop/lib/consignment-parcels-schema'
+import { describeDeliveryMoment, describeParcels, summariseParcels, type ParcelFacts } from './delivery-words'
+import type { VerifiedContact } from './calls'
 import { normaliseCompany, normaliseOrderNumber } from './text'
 
 // ---------------------------------------------------------------------------
@@ -94,12 +98,17 @@ export type VerifiedOrder = {
     dispatched: string
     progress: string | null
     expectedDelivery: string | null
+    /** When the courier handed it over, day and time. For a delivery made up of
+     *  several parcels this is left null: each parcel has its own in `parcels`. */
     deliveredOn: string | null
+    /** Present only for a delivery the courier split into several parcels. */
+    parcels: ParcelFacts[] | null
+    parcelSummary: string | null
   }>
 }
 
 export type OrderLookupOutcome =
-  | { matched: true; orders: VerifiedOrder[]; internalNumbers: string[] }
+  | { matched: true; orders: VerifiedOrder[]; internalNumbers: string[]; contact: VerifiedContact | null }
   | { matched: false }
 
 type OrderRow = {
@@ -111,6 +120,9 @@ type OrderRow = {
   total: unknown
   currency: string
   shipping_address: unknown
+  customer_name: string | null
+  customer_email: string
+  customer_phone: string | null
 }
 
 type ItemRow = { order_id: string; product_name: string; quantity: number }
@@ -124,6 +136,7 @@ type ShipmentRow = {
   delivery_slot_start: string | null
   delivery_slot_end: string | null
   delivered_at: Date | null
+  consignment_parcels: unknown
 }
 
 function day(date: Date): string {
@@ -137,15 +150,30 @@ function expected(row: ShipmentRow): string | null {
     : row.delivery_date
 }
 
+/** The contact details of the customer the matched orders belong to, or null
+ *  when there are none or the orders disagree about who that is. Kept on the
+ *  server: the assistant is told only that details are on file. */
+function sharedContact(orders: readonly OrderRow[]): VerifiedContact | null {
+  const emails = new Set(orders.map((order) => order.customer_email.trim().toLowerCase()).filter(Boolean))
+  const newest = orders[0]
+  if (!newest || emails.size !== 1) return null
+  return {
+    name: newest.customer_name?.trim() ?? '',
+    email: newest.customer_email.trim().toLowerCase(),
+    phone: newest.customer_phone?.trim() ?? '',
+  }
+}
+
 export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcome> {
   const candidates = await findCandidates(claim)
   const passed = candidates.filter((row) => claimMatchesOrder(claim, identityOf(row)))
   if (passed.length === 0) return { matched: false }
 
   const ids = passed.slice(0, MAX_ORDERS_RETURNED).map((row) => row.id)
-  const [orders, items, shipments, config] = await Promise.all([
+  const [orders, items, shipments, config, timezone] = await Promise.all([
     prisma.$queryRaw<OrderRow[]>(Prisma.sql`
-      SELECT o."id", o."order_number", o."status", o."payment_status", o."created_at", o."total", o."currency", o."shipping_address"
+      SELECT o."id", o."order_number", o."status", o."payment_status", o."created_at", o."total", o."currency", o."shipping_address",
+             o."customer_name", o."customer_email", o."customer_phone"
       FROM "shp_orders" o WHERE o."id" IN (${Prisma.join(ids)}) ORDER BY o."created_at" DESC
     `),
     prisma.$queryRaw<ItemRow[]>(Prisma.sql`
@@ -154,10 +182,11 @@ export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcom
     `),
     prisma.$queryRaw<ShipmentRow[]>(Prisma.sql`
       SELECT "order_id", "carrier", "shipped_at", "tracking_stage", "delivery_date",
-             "delivery_slot_start", "delivery_slot_end", "delivered_at"
+             "delivery_slot_start", "delivery_slot_end", "delivered_at", "consignment_parcels"
       FROM "shp_shipments" WHERE "order_id" IN (${Prisma.join(ids)}) ORDER BY "shipped_at"
     `),
     getShopConfigCached(),
+    getSiteTimezone(),
   ])
 
   const verified: VerifiedOrder[] = orders.map((order) => ({
@@ -172,13 +201,25 @@ export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcom
       .map((item) => ({ name: item.product_name, quantity: item.quantity })),
     deliveries: shipments
       .filter((shipment) => shipment.order_id === order.id)
-      .map((shipment) => ({
-        carrier: shipment.carrier,
-        dispatched: day(shipment.shipped_at),
-        progress: trackingStageWords(shipment.tracking_stage),
-        expectedDelivery: expected(shipment),
-        deliveredOn: shipment.delivered_at ? day(shipment.delivered_at) : null,
-      })),
+      .map((shipment) => {
+        const boxes = parseConsignmentParcels(shipment.consignment_parcels)
+        const split = boxes !== null && boxes.length > 1
+        const parcels = split ? describeParcels(boxes, timezone) : null
+        return {
+          carrier: shipment.carrier,
+          dispatched: day(shipment.shipped_at),
+          progress: trackingStageWords(shipment.tracking_stage),
+          expectedDelivery: expected(shipment),
+          deliveredOn: !split && shipment.delivered_at ? describeDeliveryMoment(shipment.delivered_at, timezone) : null,
+          parcels,
+          parcelSummary: parcels ? summariseParcels(parcels) : null,
+        }
+      }),
   }))
-  return { matched: true, orders: verified, internalNumbers: verified.map((order) => order.orderNumber) }
+  return {
+    matched: true,
+    orders: verified,
+    internalNumbers: verified.map((order) => order.orderNumber),
+    contact: sharedContact(orders),
+  }
 }

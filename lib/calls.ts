@@ -31,14 +31,19 @@ export type CallRecord = {
   handledAt: Date | null
   readAt: Date | null
   verifiedOrders: string[]
+  /** Who the verified order belongs to, as the order itself records them. */
+  verifiedContact: VerifiedContact
   failedOrderChecks: number
   updatedAt: Date
 }
 
+export type VerifiedContact = { name: string; email: string; phone: string }
+
 const COLUMNS = `
   id, call_sid, conversation_id, from_number, to_number, status, started_at, duration_seconds,
   summary, transcript, caller_name, caller_email, caller_phone, callback_needed, callback_reason,
-  handled_at, read_at, verified_orders, failed_order_checks, updated_at
+  handled_at, read_at, verified_orders, verified_contact_name, verified_contact_email,
+  verified_contact_phone, failed_order_checks, updated_at
 `
 
 function parseTranscript(value: unknown): TranscriptTurn[] {
@@ -73,6 +78,11 @@ export function mapCall(row: Record<string, unknown>): CallRecord {
     handledAt: (row.handled_at as Date | null) ?? null,
     readAt: (row.read_at as Date | null) ?? null,
     verifiedOrders: Array.isArray(row.verified_orders) ? (row.verified_orders as string[]) : [],
+    verifiedContact: {
+      name: (row.verified_contact_name as string | null) ?? '',
+      email: (row.verified_contact_email as string | null) ?? '',
+      phone: (row.verified_contact_phone as string | null) ?? '',
+    },
     failedOrderChecks: Number(row.failed_order_checks),
     updatedAt: row.updated_at as Date,
   }
@@ -125,12 +135,13 @@ export async function linkConversation(callId: string, conversationId: string): 
 
 export async function recordCallback(
   callId: string,
-  details: { name: string; email: string; reason: string },
+  details: { name: string; email: string; phone: string; reason: string },
 ): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "acall_calls" SET
       "caller_name" = ${details.name},
       "caller_email" = ${details.email},
+      "caller_phone" = ${details.phone},
       "callback_needed" = true,
       "callback_reason" = ${details.reason},
       "handled_at" = NULL,
@@ -144,6 +155,21 @@ export async function recordVerifiedOrder(callId: string, orderNumber: string): 
   await prisma.$executeRaw`
     UPDATE "acall_calls" SET
       "verified_orders" = CASE WHEN ${orderNumber}::text = ANY("verified_orders") THEN "verified_orders" ELSE array_append("verified_orders", ${orderNumber}::text) END,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${callId}
+  `
+}
+
+/** Keeps the contact details of the verified order for the callback. Set only
+ *  when it is unambiguous, and cleared otherwise: a caller who has verified two
+ *  different customers' orders must be asked who they are. */
+export async function recordVerifiedContact(callId: string, contact: VerifiedContact | null): Promise<void> {
+  const { name, email, phone } = contact ?? { name: '', email: '', phone: '' }
+  await prisma.$executeRaw`
+    UPDATE "acall_calls" SET
+      "verified_contact_name" = ${name},
+      "verified_contact_email" = ${email},
+      "verified_contact_phone" = ${phone},
       "updated_at" = CURRENT_TIMESTAMP
     WHERE "id" = ${callId}
   `

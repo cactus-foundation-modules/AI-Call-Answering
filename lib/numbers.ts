@@ -58,9 +58,13 @@ export async function saveAssignment(input: NumberAssignment): Promise<void> {
  *  say about it. Pure, so the rule is one readable line a test can pin. */
 export function shouldAnswer(
   assignment: Pick<NumberAssignment, 'enabled' | 'mode'> | null,
-  call: { open: boolean; wouldForward: boolean },
+  call: { open: boolean; wouldForward: boolean; unanswered?: boolean },
 ): boolean {
   if (!assignment || !assignment.enabled) return false
+  // Forwarding has already rung every phone, every time it was set to, and
+  // nobody picked up. 'always' never gets here (it took the call on the first
+  // offer), so this is the 'when_unattended' number's moment.
+  if (call.unanswered) return true
   if (assignment.mode === 'always') return true
   return !call.open || !call.wouldForward
 }

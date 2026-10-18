@@ -93,23 +93,122 @@ const VoicesResponse = z.object({
     voice_id: z.string(),
     name: z.string(),
     category: z.string().nullish(),
-    labels: z.record(z.string(), z.string()).nullish(),
+    labels: z.record(z.string(), z.string().nullish()).nullish(),
+    preview_url: z.string().nullish(),
   })),
 })
 
-export type VoiceChoice = { id: string; name: string; description: string }
+export type VoiceChoice = {
+  id: string
+  name: string
+  description: string
+  accent: string
+  gender: string
+  age: string
+  previewUrl: string | null
+}
 
+function describeVoice(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => !!part).join(', ')
+}
+
+/** The voices already on the account. */
 export async function listVoices(apiKey: string): Promise<VoiceChoice[]> {
   const { voices } = await sendJson(apiKey, '/v1/voices', VoicesResponse)
   return voices
     .map((voice) => ({
       id: voice.voice_id,
       name: voice.name,
-      description: [voice.labels?.accent, voice.labels?.gender, voice.labels?.descriptive ?? voice.labels?.use_case]
-        .filter((part): part is string => !!part)
-        .join(', '),
+      description: describeVoice([voice.labels?.accent, voice.labels?.gender, voice.labels?.descriptive ?? voice.labels?.use_case]),
+      accent: voice.labels?.accent?.toLowerCase() ?? '',
+      gender: voice.labels?.gender?.toLowerCase() ?? '',
+      age: voice.labels?.age?.toLowerCase() ?? '',
+      previewUrl: voice.preview_url ?? null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// -- the shared voice library -------------------------------------------------
+//
+// ElevenLabs keeps thousands of voices beyond the handful on an account: the
+// Voice Library. A library voice has to be added to the account before an agent
+// can speak with it; that is one call, and the voice then shows up in listVoices.
+
+const LibraryResponse = z.object({
+  voices: z.array(z.object({
+    public_owner_id: z.string(),
+    voice_id: z.string(),
+    name: z.string(),
+    accent: z.string().nullish(),
+    gender: z.string().nullish(),
+    age: z.string().nullish(),
+    descriptive: z.string().nullish(),
+    use_case: z.string().nullish(),
+    description: z.string().nullish(),
+    preview_url: z.string().nullish(),
+  })),
+  has_more: z.boolean().nullish(),
+})
+
+export type LibraryVoice = VoiceChoice & { publicOwnerId: string }
+
+export type LibraryFilters = {
+  search: string
+  accent: string
+  gender: string
+  age: string
+  page: number
+}
+
+const LIBRARY_PAGE_SIZE = 24
+
+export async function searchVoiceLibrary(
+  apiKey: string,
+  filters: LibraryFilters,
+): Promise<{ voices: LibraryVoice[]; hasMore: boolean }> {
+  const query = new URLSearchParams({
+    page_size: String(LIBRARY_PAGE_SIZE),
+    page: String(Math.max(0, filters.page)),
+    sort: 'trending',
+  })
+  // Calls are conversation, not narration, and the library is dominated by
+  // audiobook readers that sound wrong on a phone line. Not applied when
+  // looking for a voice by name: "Katie" is wanted whatever she is tagged as.
+  if (!filters.search.trim()) query.set('use_cases', 'conversational')
+  if (filters.search.trim()) query.set('search', filters.search.trim())
+  if (filters.accent) query.set('accent', filters.accent)
+  if (filters.gender) query.set('gender', filters.gender)
+  if (filters.age) query.set('age', filters.age)
+  const result = await sendJson(apiKey, `/v1/shared-voices?${query.toString()}`, LibraryResponse)
+  return {
+    hasMore: result.has_more === true,
+    voices: result.voices.map((voice) => ({
+      id: voice.voice_id,
+      publicOwnerId: voice.public_owner_id,
+      name: voice.name,
+      description: describeVoice([voice.accent, voice.gender, voice.descriptive ?? voice.use_case]),
+      accent: voice.accent?.toLowerCase() ?? '',
+      gender: voice.gender?.toLowerCase() ?? '',
+      age: voice.age?.toLowerCase() ?? '',
+      previewUrl: voice.preview_url ?? null,
+    })),
+  }
+}
+
+const AddedVoice = z.object({ voice_id: z.string() })
+
+/** Adds a library voice to the account and returns the id to speak with. */
+export async function addLibraryVoice(
+  apiKey: string,
+  voice: { publicOwnerId: string; voiceId: string; name: string },
+): Promise<string> {
+  const added = await sendJson(
+    apiKey,
+    `/v1/voices/add/${encodeURIComponent(voice.publicOwnerId)}/${encodeURIComponent(voice.voiceId)}`,
+    AddedVoice,
+    { method: 'POST', body: { new_name: voice.name } },
+  )
+  return added.voice_id
 }
 
 // -- workspace webhook (post-call) -------------------------------------------

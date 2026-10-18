@@ -15,6 +15,7 @@ import { TabStrip } from '@/components/admin/TabStrip'
 import { useTabParam } from '@/components/admin/useTabParam'
 import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/SettingsHeaderActions'
 import { InfoTip } from '@/components/admin/InfoTip'
+import { VoicePicker, type Voice } from './VoicePicker'
 
 const SETTINGS_API = '/api/m/ai-call-answering/admin/settings'
 const SYNC_API = '/api/m/ai-call-answering/admin/sync'
@@ -58,8 +59,6 @@ type Draft = {
   extraInstructions: string
   maxCallMinutes: number
 }
-
-type Voice = { id: string; name: string; description: string }
 
 type NumberRow = {
   phoneSid: string
@@ -223,8 +222,6 @@ function AssistantSection() {
     return enabled ? 'The assistant is switched on.' : 'The assistant is switched off. Calls go to forwarding and voicemail.'
   })
 
-  const knownVoice = voices.some((voice) => voice.id === draft.voiceId)
-
   let status = 'Not set up yet'
   if (saved.isSetUp) status = saved.needsSetup ? 'Set up, but your settings have changed since' : 'Set up and up to date'
 
@@ -306,20 +303,13 @@ function AssistantSection() {
           <div className="card-title">Voice and brain</div>
           <div className="field">
             <label>Voice</label>
-            {voices.length > 0 ? (
-              <select value={knownVoice ? draft.voiceId : ''} style={{ maxWidth: '24rem' }} onChange={(e) => set('voiceId', e.target.value)}>
-                {!knownVoice && <option value="" disabled>Choose a voice</option>}
-                {voices.map((voice) => (
-                  <option key={voice.id} value={voice.id}>{voice.description ? `${voice.name} - ${voice.description}` : voice.name}</option>
-                ))}
-              </select>
-            ) : (
-              <input type="text" value={draft.voiceId} onChange={(e) => set('voiceId', e.target.value)} />
-            )}
-            <p className="field-hint">
-              Any voice on your ElevenLabs account. For a British shop, pick one with a British accent.
-              {voiceNote ? ` ${voiceNote}` : ''}
-            </p>
+            <VoicePicker
+              voiceId={draft.voiceId}
+              voices={voices}
+              note={voiceNote}
+              onSelect={(id) => set('voiceId', id)}
+              onAccountChanged={loadVoices}
+            />
           </div>
           <div className="field">
             <label>Speech model</label>
@@ -439,7 +429,7 @@ function NumbersSection() {
             {row.enabled && (
               <select value={row.mode} disabled={busy === row.phoneSid} style={{ maxWidth: '26rem' }} onChange={(e) => { void save(row, { mode: e.target.value as NumberRow['mode'] }) }}>
                 <option value="always">Answer every call</option>
-                <option value="when_unattended">Only when the number is shut or nothing would ring</option>
+                <option value="when_unattended">Only when the number is shut, nothing would ring, or nobody answers</option>
               </select>
             )}
             {row.enabled && !row.reachable && (
