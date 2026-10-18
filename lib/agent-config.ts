@@ -9,13 +9,15 @@ import { createHash } from 'crypto'
 // assistant was last set up" be a hash comparison rather than a round trip.
 // ---------------------------------------------------------------------------
 
-/** The five tools the assistant is given. The key is both the ElevenLabs tool
+/** The seven tools the assistant is given. The key is both the ElevenLabs tool
  *  name and the last segment of the URL it calls on this site. */
 export const TOOL_NAMES = [
   'search_products',
   'get_product',
   'list_categories',
+  'get_faqs',
   'lookup_order',
+  'email_order_link',
   'save_callback',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
@@ -62,14 +64,16 @@ export function buildPrompt(input: Pick<AgentInputs, 'businessName' | 'siteUrl' 
     `WHAT YOU CAN DO
 1. Answer questions about products. Use search_products to find them and get_product for the details. Only state facts that the tools return: sizes, materials, price, stock, options. If the tools do not say, tell the caller you do not have that detail and offer to have somebody call them back.
 2. Suggest products. Ask one question about what they need and roughly what they want to spend, search, then recommend one to three that genuinely fit, saying briefly why. list_categories shows how the shop is organised if a search finds nothing.
-3. Help with an existing order, but only after you have checked who is calling (see below).
-4. If you cannot help, take a message so somebody can get back to them (see below).`,
+3. Answer general questions about the shop or a range (delivery, returns, assembly, payment, warranty) with get_faqs, and common questions about one product from get_product. Quote the written answers; never add to them.
+4. Help with an existing order, but only after you have checked who is calling (see below).
+5. If you cannot help, take a message so somebody can get back to them (see below).`,
 
     `ORDER ENQUIRIES - CHECK WHO IS CALLING FIRST
 Never reveal anything about an order until lookup_order has confirmed it. To check, you need BOTH:
   (a) one of: the order number, the email address used on the order, or the company name on the order; AND
   (b) the delivery postcode.
 Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out an email address, phone number or full address from an order; you may confirm the town. Only discuss orders lookup_order returned.
+If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to email it to them. Only after lookup_order has matched, call email_order_link. It always goes to the address already on the order: never ask for another address, and never promise it will go anywhere else. If the tool says it cannot send, offer a callback instead.
 You cannot change, cancel or refund an order, take payment, or give a refund decision. For those, take a callback.`,
 
     `WHEN YOU CANNOT HELP, OR THE CALLER ASKS FOR A PERSON
@@ -131,6 +135,16 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
     properties: {},
     required: [],
   },
+  get_faqs: {
+    description:
+      "Look up the shop's own written answers to frequently asked questions. Use it for questions that are about the shop or a whole range rather than one product: delivery areas, returns, assembly, payment, warranties, lead times. Give a category or a collection name to get the questions for that range (they include the shop-wide ones); give neither for the shop-wide questions. Pass query with a few words from the caller's question to get just the matching answers.",
+    properties: {
+      category: textProperty('Optional. A product category name, such as "office chairs".'),
+      collection: textProperty('Optional. A collection name. Use category or collection, not both.'),
+      query: textProperty("Optional. A few words from the caller's question, such as 'returns' or 'assembly'."),
+    },
+    required: [],
+  },
   lookup_order: {
     description:
       'Check an order for the caller. REQUIRES the delivery postcode AND at least one of: order number, email address on the order, company name on the order. Returns status, items and delivery progress (with the delivery day and time of each parcel when a delivery came in several parcels) only when the details match; otherwise reports no match.',
@@ -141,6 +155,14 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       company_name: textProperty('The company name on the order, if the caller gave it. Omit if not given.'),
     },
     required: ['delivery_postcode'],
+  },
+  email_order_link: {
+    description:
+      "Email the caller the link to their order page, from the shop's own address. Only works after lookup_order has matched an order this call, and always sends to the address already on that order, which cannot be changed. Use it when the caller cannot find the link in their order confirmation email.",
+    properties: {
+      order_number: textProperty('Only if lookup_order matched more than one order and the caller means a particular one. Omit otherwise.'),
+    },
+    required: [],
   },
   save_callback: {
     description:

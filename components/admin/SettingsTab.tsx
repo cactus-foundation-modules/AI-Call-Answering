@@ -15,6 +15,7 @@ import { TabStrip } from '@/components/admin/TabStrip'
 import { useTabParam } from '@/components/admin/useTabParam'
 import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/SettingsHeaderActions'
 import { InfoTip } from '@/components/admin/InfoTip'
+import type { ModuleSettingsTabProps } from '@/lib/modules/hosted-settings'
 import { VoicePicker, type Voice } from './VoicePicker'
 
 const SETTINGS_API = '/api/m/ai-call-answering/admin/settings'
@@ -530,7 +531,12 @@ function CallsSection() {
   )
 }
 
-export function AiCallAnsweringSettingsTab() {
+// A panel another module may publish at the foot of the Assistant tab. The
+// unified inbox uses it to ask which address the order links go out from. An
+// empty slot renders nothing - no heading, no gap.
+const HOSTED_EMAIL_SLOT = 'ai-call-answering.settings-emails'
+
+export function AiCallAnsweringSettingsTab({ hostedSettingsSlots }: ModuleSettingsTabProps = {}) {
   const [sub, setSub] = useTabParam<SubTab>('sub', 'assistant', SUB_TABS.map((t) => t.key))
   return (
     <div>
@@ -538,6 +544,7 @@ export function AiCallAnsweringSettingsTab() {
         items={SUB_TABS.map((t) => ({ key: t.key, label: t.label, active: t.key === sub, onClick: () => setSub(t.key) }))}
       />
       {sub === 'assistant' && <AssistantSection />}
+      {sub === 'assistant' && hostedSettingsSlots?.[HOSTED_EMAIL_SLOT]}
       {sub === 'numbers' && <NumbersSection />}
       {sub === 'calls' && <CallsSection />}
     </div>

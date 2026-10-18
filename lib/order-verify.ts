@@ -1,4 +1,4 @@
-import { normaliseCompany, normaliseOrderNumber, normalisePostcode } from './text'
+import { normaliseCompany, normaliseOrderNumber, normalisePostcode, postcodesMatch, spokenPostcodeToText } from './text'
 
 // Proving who is calling before anything about an order is said.
 //
@@ -27,14 +27,14 @@ export type OrderIdentity = {
 
 /** Whether a claim carries enough to be worth checking at all. */
 export function isCheckableClaim(claim: OrderClaim): boolean {
-  if (normalisePostcode(claim.postcode).length < 5) return false
+  if (normalisePostcode(spokenPostcodeToText(claim.postcode)).length < 5) return false
   return !!(claim.orderNumber?.trim() || claim.email?.trim() || claim.companyName?.trim())
 }
 
 export function claimMatchesOrder(claim: OrderClaim, order: OrderIdentity): boolean {
   if (!isCheckableClaim(claim)) return false
   if (!order.shippingPostcode) return false
-  if (normalisePostcode(claim.postcode) !== normalisePostcode(order.shippingPostcode)) return false
+  if (!postcodesMatch(claim.postcode, order.shippingPostcode)) return false
 
   if (claim.orderNumber?.trim()) {
     if (normaliseOrderNumber(claim.orderNumber) !== normaliseOrderNumber(order.orderNumber)) return false

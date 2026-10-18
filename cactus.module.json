@@ -1,6 +1,6 @@
 {
   "name": "ai-call-answering",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "tablePrefix": "acall_",
   "notificationKinds": [
     {"id": "callback", "label": "Callback requests from the phone assistant", "description": "The phone assistant could not help a caller and took their name and email so somebody can get back to them.", "dedupePrefix": "ai-call-answering:callback:"}
@@ -26,6 +26,15 @@
     }
   ],
   "cookieCategories": [],
+  "cspOrigins": {
+    "media": [
+      "https://storage.googleapis.com",
+      "https://api.elevenlabs.io",
+      "https://api.us.elevenlabs.io",
+      "https://api.eu.residency.elevenlabs.io",
+      "https://api.in.residency.elevenlabs.io"
+    ]
+  },
   "settingsTabs": [
     {
       "id": "ai-call-answering",
@@ -53,6 +62,11 @@
       "component": "aiCallConversationProvider"
     }
   ],
+  "emailTemplates": {
+    "groupLabel": "Phone assistant",
+    "import": "./lib/email-templates",
+    "export": "aiCallAnsweringEmailTemplates"
+  },
   "teardown": [
     "acall_calls",
     "acall_numbers",

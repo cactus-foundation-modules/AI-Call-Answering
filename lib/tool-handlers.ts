@@ -12,7 +12,9 @@ import {
   type CallRecord,
 } from './calls'
 import { lookupOrders } from './order-queries'
+import { emailOrderLink } from './order-link'
 import { isCheckableClaim } from './order-verify'
+import { lookupFaqs } from './faq-queries'
 import { getProductDetail, listTopCategories, searchProducts } from './product-queries'
 import { isPlausibleEmail } from './text'
 import type { ToolName } from './agent-config'
@@ -42,12 +44,18 @@ const SearchInput = CallIdentity.extend({
 })
 const ProductInput = CallIdentity.extend({ product_id: z.string().trim().min(1).max(100) })
 const NoInput = CallIdentity
+const FaqInput = CallIdentity.extend({
+  category: z.string().trim().max(200).optional(),
+  collection: z.string().trim().max(200).optional(),
+  query: z.string().trim().max(200).optional(),
+})
 const OrderInput = CallIdentity.extend({
   delivery_postcode: z.string().trim().max(20).default(''),
   order_number: z.string().trim().max(60).optional(),
   email: z.string().trim().max(320).optional(),
   company_name: z.string().trim().max(160).optional(),
 })
+const OrderLinkInput = CallIdentity.extend({ order_number: z.string().trim().max(60).optional() })
 const CallbackInput = CallIdentity.extend({
   name: z.string().trim().max(120).optional(),
   email: z.string().trim().max(320).optional(),
@@ -117,6 +125,19 @@ async function runOrderLookup(input: z.infer<typeof OrderInput>): Promise<ToolRe
   }
 }
 
+async function runEmailOrderLink(input: z.infer<typeof OrderLinkInput>): Promise<ToolResult> {
+  const call = await resolveCall(input)
+  if (!call) return { ok: false, message: 'Emailing a link only works on a live phone call. Offer a callback instead.' }
+  try {
+    const outcome = await emailOrderLink(call, blankToNull(input.order_number))
+    if (!outcome.ok) return outcome
+    return { ok: true, message: 'Sent to the email address on the order. Tell the caller it is on its way and may take a minute or two, and to check their junk folder if it does not appear. Do not read the address out.' }
+  } catch {
+    // A failed send must not leave the assistant silent on a live call.
+    return { ok: false, message: 'The email could not be sent just now. Offer a callback instead.' }
+  }
+}
+
 /** A number worth ringing back: the one on the verified order, else the one
  *  the caller rang from if it is a real number rather than withheld. */
 function callbackPhone(call: CallRecord, given: string | undefined): string {
@@ -183,10 +204,25 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       if (!NoInput.safeParse(body).success) return { result: BAD_INPUT, callbackSaved: null }
       return { result: { ok: true, categories: await listTopCategories() }, callbackSaved: null }
     }
+    case 'get_faqs': {
+      const input = FaqInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const outcome = await lookupFaqs({
+        category: blankToNull(input.data.category),
+        collection: blankToNull(input.data.collection),
+        query: blankToNull(input.data.query),
+      })
+      return { result: outcome, callbackSaved: null }
+    }
     case 'lookup_order': {
       const input = OrderInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       return { result: await runOrderLookup(input.data), callbackSaved: null }
+    }
+    case 'email_order_link': {
+      const input = OrderLinkInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      return { result: await runEmailOrderLink(input.data), callbackSaved: null }
     }
     case 'save_callback': {
       const input = CallbackInput.safeParse(body)

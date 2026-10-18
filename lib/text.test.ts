@@ -5,6 +5,8 @@ import {
   normaliseCompany,
   normaliseOrderNumber,
   normalisePostcode,
+  postcodesMatch,
+  spokenPostcodeToText,
   plainText,
   searchTokens,
   truncate,
@@ -15,6 +17,34 @@ describe('normalisePostcode', () => {
     expect(normalisePostcode('sw1a 1aa')).toBe('SW1A1AA')
     expect(normalisePostcode('SW1A-1AA')).toBe('SW1A1AA')
     expect(normalisePostcode(' sw1a1aa ')).toBe('SW1A1AA')
+  })
+})
+
+describe('postcodesMatch', () => {
+  it('accepts the same postcode however it is spelled', () => {
+    expect(postcodesMatch('po7 3dl', 'PO7 3DL')).toBe(true)
+  })
+  it('puts back an O the phone line heard as a zero', () => {
+    expect(postcodesMatch('P073DL', 'PO7 3DL')).toBe(true)
+  })
+  it('fixes letters and digits in the inward code', () => {
+    expect(postcodesMatch('PO7 3D1', 'PO7 3DI')).toBe(true)
+    expect(postcodesMatch('PO7 ODL', 'PO7 0DL')).toBe(true)
+    expect(postcodesMatch('PO7 5DL', 'PO7 3DL')).toBe(false)
+  })
+  it('understands a postcode spelled out in words', () => {
+    expect(postcodesMatch('papa oh seven three delta lima', 'PO7 3DL')).toBe(true)
+    expect(postcodesMatch('S double zero one 1AA', 'S001 1AA')).toBe(true)
+  })
+  it('still rejects a different postcode', () => {
+    expect(postcodesMatch('PO7 3DM', 'PO7 3DL')).toBe(false)
+    expect(postcodesMatch('PO8 3DL', 'PO7 3DL')).toBe(false)
+  })
+})
+
+describe('spokenPostcodeToText', () => {
+  it('leaves a written postcode alone', () => {
+    expect(spokenPostcodeToText('PO7 3DL')).toBe('po73dl')
   })
 })
 
