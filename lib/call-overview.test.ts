@@ -26,6 +26,8 @@ const base: CallRecord = {
   verifiedOrders: [],
   verifiedContact: { name: '', email: '', phone: '' },
   failedOrderChecks: 0,
+  emailsSent: 0,
+  emailedTo: '',
   updatedAt: new Date('2026-10-18T10:02:00Z'),
 }
 

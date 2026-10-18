@@ -318,6 +318,31 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
   }
 }
 
+export type ProductLinkRow = { id: string; name: string; slug: string; price: string; basis: string }
+
+/** Name, price and page address for products the assistant discussed, looked up
+ *  by id so the email never repeats a price or link the model made up. Anything
+ *  that is not a visible product is dropped. */
+export async function getProductLinks(ids: string[]): Promise<ProductLinkRow[]> {
+  const wanted = [...new Set(ids.map((id) => id.trim()).filter((id) => id !== ''))]
+  if (wanted.length === 0) return []
+  const rows = await prisma.$queryRaw<Array<{ id: string; name: string; slug: string; price: unknown; sale_price: unknown }>>(Prisma.sql`
+    SELECT p."id", p."name", p."slug", p."price", p."sale_price"
+    FROM "shp_products" p
+    WHERE ${VISIBLE} AND p."id" IN (${Prisma.join(wanted)})
+  `)
+  const config = await getShopConfigCached()
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const out: ProductLinkRow[] = []
+  for (const id of wanted) {
+    const row = byId.get(id)
+    if (!row) continue
+    const { now } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
+    out.push({ id: row.id, name: row.name, slug: row.slug, price: formatPrice(now, config.currencySymbol), basis: priceBasis(config.taxMode) })
+  }
+  return out
+}
+
 export async function listTopCategories(): Promise<Array<{ name: string; description: string }>> {
   const rows = await prisma.$queryRaw<Array<{ name: string; short_description: string | null }>>`
     SELECT c."name", c."short_description"

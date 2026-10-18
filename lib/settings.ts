@@ -59,6 +59,7 @@ export type AiCallSettings = {
   businessName: string
   greeting: string
   extraInstructions: string
+  emailSignature: string
   maxCallMinutes: number
   postCallWebhookId: string | null
   webhookSecret: string | null
@@ -110,6 +111,7 @@ export async function getSettings(): Promise<AiCallSettings> {
     businessName: str(row?.business_name) ?? '',
     greeting: str(row?.greeting) ?? '',
     extraInstructions: str(row?.extra_instructions) ?? '',
+    emailSignature: str(row?.email_signature) ?? '',
     maxCallMinutes: Math.min(Math.max(minutes, 1), MAX_CALL_MINUTES_LIMIT),
     postCallWebhookId: str(row?.post_call_webhook_id),
     webhookSecret: tryDecryptSecret(str(row?.webhook_secret_encrypted)),
@@ -135,6 +137,7 @@ export type SettingsPatch = {
   businessName?: string
   greeting?: string
   extraInstructions?: string
+  emailSignature?: string
   maxCallMinutes?: number
 }
 
@@ -171,6 +174,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<void> {
   }
   if (patch.extraInstructions !== undefined) {
     await prisma.$executeRaw`UPDATE "acall_settings" SET "extra_instructions" = ${patch.extraInstructions.trim()} WHERE "id" = 'singleton'`
+  }
+  if (patch.emailSignature !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "email_signature" = ${patch.emailSignature.trim()} WHERE "id" = 'singleton'`
   }
   if (patch.maxCallMinutes !== undefined) {
     const minutes = Math.min(Math.max(Math.round(patch.maxCallMinutes), 1), MAX_CALL_MINUTES_LIMIT)

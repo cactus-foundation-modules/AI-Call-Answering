@@ -9,7 +9,7 @@ import { createHash } from 'crypto'
 // assistant was last set up" be a hash comparison rather than a round trip.
 // ---------------------------------------------------------------------------
 
-/** The seven tools the assistant is given. The key is both the ElevenLabs tool
+/** The eight tools the assistant is given. The key is both the ElevenLabs tool
  *  name and the last segment of the URL it calls on this site. */
 export const TOOL_NAMES = [
   'search_products',
@@ -18,6 +18,7 @@ export const TOOL_NAMES = [
   'get_faqs',
   'lookup_order',
   'email_order_link',
+  'email_summary',
   'save_callback',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
@@ -75,6 +76,13 @@ Never reveal anything about an order until lookup_order has confirmed it. To che
 Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out an email address, phone number or full address from an order; you may confirm the town. Only discuss orders lookup_order returned.
 If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to email it to them. Only after lookup_order has matched, call email_order_link. It always goes to the address already on the order: never ask for another address, and never promise it will go anywhere else. If the tool says it cannot send, offer a callback instead.
 You cannot change, cancel or refund an order, take payment, or give a refund decision. For those, take a callback.`,
+
+    `EMAILING WHAT YOU DISCUSSED
+After you have given product advice or answered questions, offer to email the caller a written note of it: "Would you like me to email you a summary of what we've talked about?" Only if they say yes, call email_summary.
+- If lookup_order has matched an order this call, the address on the order is used automatically: do not ask for one and never read it out. Otherwise ask for their email address, ask them to say it slowly, read it back one character at a time and wait for them to confirm before you call the tool.
+- Write the summary in plain sentences, as a short note from the shop: what they were looking for, what you recommended and why, the sizes, options and prices you quoted, and anything they said they would do next. Use only facts the tools gave you. Pass the id of every product you recommended or discussed in product_ids, so the email carries the shop's own links and prices; do not write web addresses yourself.
+- NEVER put order details in this email: no order numbers, statuses, delivery progress, addresses or phone numbers. It is for product and shop information only. If they want their order link, use email_order_link instead.
+- If the tool says it cannot send, apologise and offer a callback. Tell the caller it may take a minute or two to arrive and to check their junk folder. Do not promise anything else in the email.`,
 
     `WHEN YOU CANNOT HELP, OR THE CALLER ASKS FOR A PERSON
 First check whether you already know who the caller is. If lookup_order has matched an order this call (its result says contactOnFile), their name, email and phone number are ALREADY on the order: do NOT ask for them again. Just call save_callback with the reason, then confirm gently that the team will get back to them using the details on their order.
@@ -163,6 +171,22 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       order_number: textProperty('Only if lookup_order matched more than one order and the caller means a particular one. Omit otherwise.'),
     },
     required: [],
+  },
+  email_summary: {
+    description:
+      "Email the caller a written note of what you discussed (product advice, answers to their questions), with the shop's own links to any products you name. Only after the caller has said they want one. Never include order details. With an order matched this call the email goes to the address on the order; otherwise pass the address the caller gave, read back and confirmed.",
+    properties: {
+      email: textProperty("The caller's email address, confirmed by reading it back. Omit if an order has been looked up this call."),
+      name: textProperty("The caller's first name for the greeting, if they gave it. Omit otherwise."),
+      subject: textProperty('A short subject line, for example "The standing desks we talked about".'),
+      summary: textProperty('The note itself: plain sentences covering what they wanted, what you recommended and why, and the key facts and prices you quoted. No order details, no web addresses.'),
+      product_ids: {
+        type: 'array',
+        description: 'The id of every product you recommended or discussed, exactly as returned by search_products. The email gets the shop link and price for each. Omit if none.',
+        items: { type: 'string' },
+      },
+    },
+    required: ['subject', 'summary'],
   },
   save_callback: {
     description:

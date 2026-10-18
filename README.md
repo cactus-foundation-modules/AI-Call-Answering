@@ -26,7 +26,7 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 
 ## Setting it up
 
-1. In **Settings > AI Call Answering > Assistant**, paste the ElevenLabs key, pick a voice, set your business name, and press **Set up the assistant**. That creates the agent, its seven tools and the post-call webhook at ElevenLabs. Press it again whenever you change the voice or wording.
+1. In **Settings > AI Call Answering > Assistant**, paste the ElevenLabs key, pick a voice, set your business name, and press **Set up the assistant**. That creates the agent, its eight tools and the post-call webhook at ElevenLabs. Press it again whenever you change the voice or wording.
 2. In the **Twilio** tab, make sure the number has call handling on (forwarding or voicemail). That is what points the number at your site.
 3. In **Phone numbers**, tick the numbers the assistant should answer, and choose whether it answers every call or only when the number is shut or nothing would ring.
 4. Switch the assistant **on**.
@@ -37,7 +37,7 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 | --- | --- |
 | `twilio.inbound-call-handler` | The hook the Twilio module offers every call to. The assistant takes the call by asking ElevenLabs to register it and returning the connection instructions. |
 | `core.conversation-provider` | Publishes each call to the unified inbox as a phone conversation. |
-| `tools/<name>` | The seven tools the assistant calls mid-call: `search_products`, `get_product`, `list_categories`, `get_faqs`, `lookup_order`, `email_order_link`, `save_callback`. Authenticated with a random bearer token made at setup. |
+| `tools/<name>` | The eight tools the assistant calls mid-call: `search_products`, `get_product`, `list_categories`, `get_faqs`, `lookup_order`, `email_order_link`, `email_summary`, `save_callback`. Authenticated with a random bearer token made at setup. |
 | `webhooks/post-call` | ElevenLabs delivers the transcript here after hang-up. Checked against its HMAC signature. |
 
 Calls from other agents in the same ElevenLabs workspace are ignored.

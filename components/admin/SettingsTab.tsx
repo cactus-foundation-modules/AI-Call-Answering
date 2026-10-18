@@ -38,6 +38,7 @@ type State = {
   businessName: string
   greeting: string
   extraInstructions: string
+  emailSignature: string
   maxCallMinutes: number
   agentId: string | null
   isSetUp: boolean
@@ -61,6 +62,7 @@ type Draft = {
   businessName: string
   greeting: string
   extraInstructions: string
+  emailSignature: string
   maxCallMinutes: number
 }
 
@@ -106,6 +108,7 @@ function draftOf(state: State): Draft {
     businessName: state.businessName,
     greeting: state.greeting,
     extraInstructions: state.extraInstructions,
+    emailSignature: state.emailSignature,
     maxCallMinutes: state.maxCallMinutes,
   }
 }
@@ -200,6 +203,7 @@ function AssistantSection() {
       businessName: draft.businessName,
       greeting: draft.greeting,
       extraInstructions: draft.extraInstructions,
+      emailSignature: draft.emailSignature,
       maxCallMinutes: draft.maxCallMinutes,
     }
     if (draft.apiKey.trim()) body.apiKey = draft.apiKey.trim()
@@ -447,6 +451,23 @@ function AssistantSection() {
               Anything particular to your business: opening hours, how you handle returns, what never to promise. These are
               added to the built-in rules, which already cover checking who is calling before discussing an order and
               taking a name and email when it cannot help.
+            </p>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-title">Emails to callers</div>
+          <p className="field-hint">
+            The assistant offers to email callers a written note of what you discussed: the advice, and links to any
+            products it mentioned. Choose the address those emails come from, and the inbox a copy is filed in, in the
+            &ldquo;Sending address&rdquo; box below. Replies then land in that inbox.
+          </p>
+          <div className="field">
+            <label>Email signature</label>
+            <textarea rows={5} value={draft.emailSignature} onChange={(e) => set('emailSignature', e.target.value)} />
+            <p className="field-hint">
+              Added to the end of every email the assistant sends, for example a name, job title and phone number. Plain
+              text; new lines are kept. Leave empty for no signature.
             </p>
           </div>
         </div>

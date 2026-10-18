@@ -29,6 +29,9 @@ export function buildOverview(call: CallRecord): string {
   if (call.failedOrderChecks > 0) {
     lines.push(`Order checks that did not match: ${call.failedOrderChecks}`)
   }
+  if (call.emailsSent > 0) {
+    lines.push(`Emailed the caller what was discussed (${call.emailsSent}): ${call.emailedTo}`)
+  }
   if (call.callbackNeeded) {
     lines.push('')
     lines.push(call.handledAt ? 'CALLBACK REQUESTED (dealt with)' : 'CALLBACK REQUESTED - please get back to this caller')

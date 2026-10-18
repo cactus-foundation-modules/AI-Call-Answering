@@ -34,6 +34,9 @@ export type CallRecord = {
   /** Who the verified order belongs to, as the order itself records them. */
   verifiedContact: VerifiedContact
   failedOrderChecks: number
+  /** Emails the assistant has sent the caller on this call, and the last address. */
+  emailsSent: number
+  emailedTo: string
   updatedAt: Date
 }
 
@@ -43,7 +46,7 @@ const COLUMNS = `
   id, call_sid, conversation_id, from_number, to_number, status, started_at, duration_seconds,
   summary, transcript, caller_name, caller_email, caller_phone, callback_needed, callback_reason,
   handled_at, read_at, verified_orders, verified_contact_name, verified_contact_email,
-  verified_contact_phone, failed_order_checks, updated_at
+  verified_contact_phone, failed_order_checks, emails_sent, emailed_to, updated_at
 `
 
 function parseTranscript(value: unknown): TranscriptTurn[] {
@@ -84,6 +87,8 @@ export function mapCall(row: Record<string, unknown>): CallRecord {
       phone: (row.verified_contact_phone as string | null) ?? '',
     },
     failedOrderChecks: Number(row.failed_order_checks),
+    emailsSent: Number(row.emails_sent ?? 0),
+    emailedTo: (row.emailed_to as string | null) ?? '',
     updatedAt: row.updated_at as Date,
   }
 }
@@ -188,6 +193,25 @@ export async function recentFailedChecksFrom(fromNumber: string): Promise<number
   if (!fromNumber) return 0
   const rows = await prisma.$queryRaw<Array<{ total: number | bigint | null }>>`
     SELECT COALESCE(SUM("failed_order_checks"), 0) AS total FROM "acall_calls"
+    WHERE "from_number" = ${fromNumber} AND "started_at" > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+  `
+  return Number(rows[0]?.total ?? 0)
+}
+
+/** Notes that the assistant has just emailed the caller. */
+export async function recordEmailSent(callId: string, address: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "acall_calls" SET "emails_sent" = "emails_sent" + 1, "emailed_to" = ${address}, "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${callId}
+  `
+}
+
+/** Emails sent from one number in the last hour, across calls, so ringing back
+ *  does not reset the allowance. */
+export async function recentEmailsFrom(fromNumber: string): Promise<number> {
+  if (!fromNumber) return 0
+  const rows = await prisma.$queryRaw<Array<{ total: number | bigint | null }>>`
+    SELECT COALESCE(SUM("emails_sent"), 0) AS total FROM "acall_calls"
     WHERE "from_number" = ${fromNumber} AND "started_at" > CURRENT_TIMESTAMP - INTERVAL '1 hour'
   `
   return Number(rows[0]?.total ?? 0)

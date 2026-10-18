@@ -13,6 +13,7 @@ import {
 } from './calls'
 import { lookupOrders } from './order-queries'
 import { emailOrderLink } from './order-link'
+import { emailCallSummary, MAX_PRODUCTS_PER_EMAIL } from './call-email'
 import { isCheckableClaim } from './order-verify'
 import { lookupFaqs } from './faq-queries'
 import { getProductDetail, listTopCategories, searchProducts } from './product-queries'
@@ -56,6 +57,13 @@ const OrderInput = CallIdentity.extend({
   company_name: z.string().trim().max(160).optional(),
 })
 const OrderLinkInput = CallIdentity.extend({ order_number: z.string().trim().max(60).optional() })
+const SummaryInput = CallIdentity.extend({
+  email: z.string().trim().max(320).optional(),
+  name: z.string().trim().max(120).optional(),
+  subject: z.string().trim().max(200).optional(),
+  summary: z.string().trim().min(1).max(4000),
+  product_ids: z.array(z.string().trim().min(1).max(100)).max(MAX_PRODUCTS_PER_EMAIL * 2).optional(),
+})
 const CallbackInput = CallIdentity.extend({
   name: z.string().trim().max(120).optional(),
   email: z.string().trim().max(320).optional(),
@@ -132,6 +140,25 @@ async function runEmailOrderLink(input: z.infer<typeof OrderLinkInput>): Promise
     const outcome = await emailOrderLink(call, blankToNull(input.order_number))
     if (!outcome.ok) return outcome
     return { ok: true, message: 'Sent to the email address on the order. Tell the caller it is on its way and may take a minute or two, and to check their junk folder if it does not appear. Do not read the address out.' }
+  } catch {
+    // A failed send must not leave the assistant silent on a live call.
+    return { ok: false, message: 'The email could not be sent just now. Offer a callback instead.' }
+  }
+}
+
+async function runEmailSummary(input: z.infer<typeof SummaryInput>): Promise<ToolResult> {
+  const call = await resolveCall(input)
+  if (!call) return { ok: false, message: 'Emailing a summary only works on a live phone call. Offer a callback instead.' }
+  try {
+    const outcome = await emailCallSummary(call, {
+      email: blankToNull(input.email),
+      name: blankToNull(input.name),
+      subject: input.subject,
+      summary: input.summary,
+      productIds: input.product_ids ?? [],
+    })
+    if (!outcome.ok) return outcome
+    return { ok: true, message: 'Sent. Tell the caller it is on its way and may take a minute or two, and to check their junk folder if it does not appear. Do not read the address out.' }
   } catch {
     // A failed send must not leave the assistant silent on a live call.
     return { ok: false, message: 'The email could not be sent just now. Offer a callback instead.' }
@@ -223,6 +250,11 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const input = OrderLinkInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       return { result: await runEmailOrderLink(input.data), callbackSaved: null }
+    }
+    case 'email_summary': {
+      const input = SummaryInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      return { result: await runEmailSummary(input.data), callbackSaved: null }
     }
     case 'save_callback': {
       const input = CallbackInput.safeParse(body)

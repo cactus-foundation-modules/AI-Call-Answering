@@ -32,6 +32,11 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('save_callback')
     expect(prompt).toContain('Deskwell')
   })
+  it('offers an emailed summary that never carries order details', () => {
+    const prompt = buildPrompt(inputs)
+    expect(prompt).toContain('email_summary')
+    expect(prompt).toContain('NEVER put order details')
+  })
   it('appends the owner instructions last', () => {
     const prompt = buildPrompt({ ...inputs, extraInstructions: 'Never mention Brexit.' })
     expect(prompt.endsWith('Never mention Brexit.')).toBe(true)

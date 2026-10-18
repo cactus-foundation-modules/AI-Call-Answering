@@ -39,6 +39,7 @@ async function currentState() {
     businessName: settings.businessName,
     greeting: settings.greeting,
     extraInstructions: settings.extraInstructions,
+    emailSignature: settings.emailSignature,
     maxCallMinutes: settings.maxCallMinutes,
     agentId: settings.agentId,
     isSetUp: !!settings.agentId,
@@ -77,6 +78,7 @@ const Body = z.object({
   businessName: z.string().trim().max(120).optional(),
   greeting: z.string().trim().max(600).optional(),
   extraInstructions: z.string().max(4000).optional(),
+  emailSignature: z.string().max(1500).optional(),
   maxCallMinutes: z.number().int().min(1).max(MAX_CALL_MINUTES_LIMIT).optional(),
 })
 
