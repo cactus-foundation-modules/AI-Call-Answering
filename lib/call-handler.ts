@@ -1,7 +1,9 @@
 import type { InboundCallContext, InboundCallHandler } from '@/modules/twilio/lib/inbound-call-handlers'
 import { openCall } from './calls'
-import { ElevenLabsError, REGISTER_CALL_TIMEOUT_MS, innerTwiml, registerCall } from './elevenlabs'
-import { callCandidates, isKeyProblem, listFallbackKeys, markKeyRefused, orderCandidates } from './fallback-keys'
+import { escapeXml } from '@/modules/twilio/lib/twilio'
+import { getSiteUrl } from '@/lib/config/env'
+import { ElevenLabsError, REGISTER_CALL_TIMEOUT_MS, innerTwiml, isOutOfCredit, registerCall } from './elevenlabs'
+import { callCandidates, isKeyProblem, knownOutOfCredit, listFallbackKeys, markKeyRefused, orderCandidates } from './fallback-keys'
 import { getAssignmentForNumber, shouldAnswer } from './numbers'
 import { getSettings } from './settings'
 
@@ -22,6 +24,19 @@ const TOTAL_BUDGET_MS = 11_000
 /** Not worth starting another attempt with less than this left. */
 const MIN_ATTEMPT_MS = 1_500
 
+/** Where Twilio goes when the assistant's end of the call finishes. It tells a
+ *  call that ran its course from one ElevenLabs dropped a moment in. */
+export function callEndedPath(): string {
+  return '/api/m/ai-call-answering/webhooks/call-ended'
+}
+
+/** The connection, followed by a step that runs only once the assistant has let
+ *  go. A caller who hangs up never reaches it. */
+export function withEndOfCallCheck(twiml: string, keyId: string): string {
+  const url = `${getSiteUrl()}${callEndedPath()}?key=${encodeURIComponent(keyId)}`
+  return `${twiml}<Redirect method="POST">${escapeXml(url)}</Redirect>`
+}
+
 export const aiInboundCallHandler: InboundCallHandler = async (call: InboundCallContext) => {
   const startedAt = Date.now()
   const settings = await getSettings()
@@ -41,6 +56,12 @@ export const aiInboundCallHandler: InboundCallHandler = async (call: InboundCall
   for (const candidate of candidates) {
     const remaining = TOTAL_BUDGET_MS - (Date.now() - startedAt)
     if (remaining < MIN_ATTEMPT_MS) break
+    // ElevenLabs takes a call for an account with no credit and then drops it.
+    if (await knownOutOfCredit(candidate, (key) => isOutOfCredit(key, Math.min(2_000, remaining)))) {
+      markKeyRefused(candidate.id)
+      console.error(`[ai-call-answering] ${candidate.id === 'main' ? 'main key' : 'fallback key'} is out of credit, skipping it`)
+      continue
+    }
     try {
       const document = await registerCall(candidate.apiKey, {
         agentId: candidate.agentId,
@@ -60,7 +81,7 @@ export const aiInboundCallHandler: InboundCallHandler = async (call: InboundCall
       await openCall({ callSid: call.callSid, fromNumber: call.from, toNumber: call.to }).catch((error: unknown) => {
         console.error('[ai-call-answering] could not open the call record', error)
       })
-      return twiml
+      return withEndOfCallCheck(twiml, candidate.id)
     } catch (error) {
       if (isKeyProblem(error)) markKeyRefused(candidate.id)
       const reason = error instanceof ElevenLabsError ? error.message : error

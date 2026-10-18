@@ -211,6 +211,26 @@ export async function addLibraryVoice(
   return added.voice_id
 }
 
+const VoiceDetail = z.object({
+  name: z.string(),
+  sharing: z.object({
+    public_owner_id: z.string().nullish(),
+    original_voice_id: z.string().nullish(),
+  }).nullish(),
+})
+
+/** Where a voice on this account came from in the shared library, or null when
+ *  it did not come from there (a cloned or premade voice has no library entry). */
+export async function findLibraryOrigin(
+  apiKey: string,
+  voiceId: string,
+): Promise<{ publicOwnerId: string; voiceId: string; name: string } | null> {
+  const voice = await sendJson(apiKey, `/v1/voices/${encodeURIComponent(voiceId)}`, VoiceDetail)
+  const owner = voice.sharing?.public_owner_id
+  const original = voice.sharing?.original_voice_id
+  return owner && original ? { publicOwnerId: owner, voiceId: original, name: voice.name } : null
+}
+
 // -- workspace webhook (post-call) -------------------------------------------
 
 const WebhookCreated = z.object({ webhook_id: z.string(), webhook_secret: z.string().nullish() })
@@ -259,6 +279,32 @@ export async function agentExists(apiKey: string, agentId: string): Promise<bool
   } catch (error) {
     if (error instanceof ElevenLabsError && error.status === 404) return false
     throw error
+  }
+}
+
+// -- credit -----------------------------------------------------------------
+//
+// register-call accepts a call for an account with no credit left, and
+// ElevenLabs then drops the caller a second or two in. Asking the account for its
+// allowance first lets the call go to the next key, or to voicemail, instead.
+
+const SubscriptionResponse = z.object({
+  character_count: z.number().optional(),
+  character_limit: z.number().optional(),
+  can_extend_character_limit: z.boolean().nullish(),
+})
+
+/** True when the account has used all its credit and may not go over. Null when
+ *  that cannot be told (key lacks permission to read it, ElevenLabs slow): the
+ *  caller then carries on and tries the call. */
+export async function isOutOfCredit(apiKey: string, timeoutMs = 2_000): Promise<boolean | null> {
+  try {
+    const sub = await sendJson(apiKey, '/v1/user/subscription', SubscriptionResponse, { timeoutMs })
+    if (typeof sub.character_count !== 'number' || typeof sub.character_limit !== 'number') return null
+    if (sub.character_limit <= 0) return null
+    return sub.character_count >= sub.character_limit && sub.can_extend_character_limit !== true
+  } catch {
+    return null
   }
 }
 

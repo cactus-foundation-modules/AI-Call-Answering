@@ -8,6 +8,7 @@ import {
   COOLDOWN_MS,
   callCandidates,
   isKeyProblem,
+  knownOutOfCredit,
   knownAgentIds,
   orderCandidates,
   webhookSecrets,
@@ -67,5 +68,19 @@ describe('webhook trust', () => {
     const fallbacks = [fallback('a'), fallback('b', { webhookSecret: null, agentId: null })]
     expect(webhookSecrets(settings, fallbacks)).toEqual(['secret-main', 'secret-a'])
     expect(knownAgentIds(settings, fallbacks)).toEqual(['agent-main', 'agent-a'])
+  })
+})
+
+describe('knownOutOfCredit', () => {
+  const candidate = { id: 'credit-test', apiKey: 'k', agentId: 'a' }
+  it('trusts a recent answer and does not ask again', async () => {
+    let asked = 0
+    const check = async () => { asked += 1; return true }
+    expect(await knownOutOfCredit(candidate, check, 1_000)).toBe(true)
+    expect(await knownOutOfCredit(candidate, check, 2_000)).toBe(true)
+    expect(asked).toBe(1)
+  })
+  it('tries the call when the allowance cannot be read', async () => {
+    expect(await knownOutOfCredit({ ...candidate, id: 'unknown' }, async () => null)).toBe(false)
   })
 })

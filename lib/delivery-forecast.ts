@@ -160,8 +160,15 @@ export function describeScope(scope: ForecastScope): string {
 }
 
 function describeGroup(group: ForecastGroup, symbol: string, basis: string, single: boolean): string {
+  // A group with no date is one the shop's estimate refused: out of stock and
+  // set not to be sold on backorder. Say that, rather than hint at a gap.
+  if (!group.dateLabel) {
+    return single
+      ? 'currently out of stock, so there is no delivery date'
+      : `${describeScope(group)}: currently out of stock, so there is no delivery date`
+  }
   const price = group.price === 0 ? 'free' : `${formatPrice(group.price, symbol)} ${basis}`
-  const when = group.dateLabel ? `delivered by ${group.dateLabel}` : 'no delivery date can be promised right now'
+  const when = `delivered by ${group.dateLabel}`
   return single ? `${price}, ${when}` : `${describeScope(group)}: ${price}, ${when}`
 }
 

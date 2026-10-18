@@ -6,6 +6,9 @@ import {
   createAgent,
   createPostCallWebhook,
   createTool,
+  addLibraryVoice,
+  findLibraryOrigin,
+  listVoices,
   updateAgent,
   updateTool,
 } from './elevenlabs'
@@ -84,6 +87,22 @@ async function upsertTool(apiKey: string, existingId: string | undefined, config
   return createTool(apiKey, config)
 }
 
+/** The id to speak with on a second account. A voice is per account: one picked
+ *  from the shared library was added to the main account only, so it is added to
+ *  this one too, and this account's own copy is used. */
+async function voiceForAccount(mainKey: string, accountKey: string, voiceId: string): Promise<string> {
+  const there = await listVoices(accountKey)
+  if (there.some((voice) => voice.id === voiceId)) return voiceId
+  const origin = await findLibraryOrigin(mainKey, voiceId).catch(() => null)
+  if (!origin) {
+    throw new SetupError('The chosen voice is not on this ElevenLabs account, and it is not a library voice that can be added to it. Pick a library voice, or add the same voice to this account.')
+  }
+  // Added by an earlier run under another id: use that, rather than a duplicate.
+  const earlier = there.find((voice) => voice.name === origin.name)
+  if (earlier) return earlier.id
+  return addLibraryVoice(accountKey, origin)
+}
+
 /** What one ElevenLabs account needs to answer calls, made or brought up to date.
  *  The webhook secret is passed to `keepSecret` the moment it is handed over,
  *  because it is shown once. */
@@ -94,6 +113,7 @@ async function provisionAccount(
   toolsToken: string,
   existing: { webhookId: string | null; toolIds: Record<string, string>; agentId: string | null },
   keepSecret: (webhookId: string, secret: string) => Promise<void>,
+  accountVoiceId: string = settings.voiceId,
 ): Promise<{ agentId: string; created: boolean; webhookId: string; webhookSecret: string | null; toolIds: Record<string, string>; syncedHash: string }> {
   let webhookId = existing.webhookId
   let webhookSecret: string | null = null
@@ -111,7 +131,9 @@ async function provisionAccount(
   }
 
   const inputs = agentInputsFrom(settings, siteUrl, toolsToken, toolIds, webhookId)
-  const body = buildAgentBody(inputs)
+  // The hash stays on the chosen voice, so the screen can tell what is out of
+  // date; only the agent itself speaks with this account's copy of it.
+  const body = buildAgentBody({ ...inputs, voiceId: accountVoiceId })
   let agentId = existing.agentId
   let created = false
   if (agentId && (await agentExists(apiKey, agentId))) {
@@ -168,6 +190,7 @@ export async function provisionAssistant(): Promise<{ agentId: string; created: 
       continue
     }
     try {
+      const accountVoice = await voiceForAccount(apiKey, fallback.apiKey, settings.voiceId)
       const done = await provisionAccount(
         fallback.apiKey,
         settings,
@@ -175,6 +198,7 @@ export async function provisionAssistant(): Promise<{ agentId: string; created: 
         toolsToken,
         { webhookId: fallback.postCallWebhookId, toolIds: fallback.toolIds, agentId: fallback.agentId },
         (webhookId, secret) => saveFallbackWebhook(fallback.id, webhookId, secret),
+        accountVoice,
       )
       await saveFallbackProvisioned(fallback.id, { agentId: done.agentId, toolIds: done.toolIds, syncedHash: done.syncedHash })
     } catch (error) {

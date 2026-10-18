@@ -129,6 +129,27 @@ export function markKeyRefused(id: string, now: number = Date.now()): void {
   coolingUntil.set(id, now + COOLDOWN_MS)
 }
 
+/** How long a "has credit" or "has none" answer is trusted, so a busy line does
+ *  not ask ElevenLabs about the allowance on every call. */
+export const CREDIT_CHECK_TTL_MS = 60_000
+
+const creditChecked = new Map<string, { outOfCredit: boolean; at: number }>()
+
+/** Whether a key is known to have no credit left. Unknown counts as "has some":
+ *  the call is tried rather than turned away on a guess. */
+export async function knownOutOfCredit(
+  candidate: CallCandidate,
+  check: (apiKey: string) => Promise<boolean | null>,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const cached = creditChecked.get(candidate.id)
+  if (cached && now - cached.at < CREDIT_CHECK_TTL_MS) return cached.outOfCredit
+  const answer = await check(candidate.apiKey)
+  if (answer === null) return false
+  creditChecked.set(candidate.id, { outOfCredit: answer, at: now })
+  return answer
+}
+
 /** Candidates that are not cooling down keep their order and go first; the
  *  cooling ones follow, so a call still has somewhere to go if all are refused. */
 export function orderCandidates(

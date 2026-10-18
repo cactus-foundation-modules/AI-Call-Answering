@@ -38,12 +38,12 @@ describe('describeForecast', () => {
     expect(standard.note).toBe('Kerbside')
   })
 
-  it('says so when a date cannot be promised', () => {
+  it('says plainly that an option is out of stock when it has no date', () => {
     const odd: DeliveryForecast = {
       ...forecast,
       services: [{ ...forecast.services[0]!, groups: [{ ...colours, date: null, dateLabel: null, price: 10 }] }],
     }
-    expect(describeForecast(odd, '£', 'EXCLUSIVE')[0]!.options[0]).toContain('no delivery date can be promised')
+    expect(describeForecast(odd, '£', 'EXCLUSIVE')[0]!.options[0]).toContain('out of stock')
   })
 
   it('names the options that cannot have a service', () => {
