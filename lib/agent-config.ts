@@ -183,7 +183,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       product_ids: {
         type: 'array',
         description: 'The id of every product you recommended or discussed, exactly as returned by search_products. The email gets the shop link and price for each. Omit if none.',
-        items: { type: 'string' },
+        items: textProperty('One product id, exactly as returned by search_products.'),
       },
     },
     required: ['subject', 'summary'],

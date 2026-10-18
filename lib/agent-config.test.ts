@@ -66,6 +66,16 @@ describe('buildToolConfig', () => {
       expect(tool.api_schema.request_body_schema.properties.call_sid?.description).toBeUndefined()
     }
   })
+  it('describes every array item, which ElevenLabs insists on', () => {
+    for (const name of TOOL_NAMES) {
+      const tool = buildToolConfig(name, inputs.siteUrl, 'x') as {
+        api_schema: { request_body_schema: { properties: Record<string, { type?: string; items?: { description?: string } }> } }
+      }
+      for (const prop of Object.values(tool.api_schema.request_body_schema.properties)) {
+        if (prop.type === 'array') expect(prop.items?.description).toBeTruthy()
+      }
+    }
+  })
 })
 
 describe('buildAgentBody', () => {

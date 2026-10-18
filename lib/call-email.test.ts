@@ -16,6 +16,12 @@ describe('signatureHtml', () => {
     expect(signatureHtml('  \n ')).toBe('')
     expect(signatureHtml('Alex\nDeskwell <x>')).toContain('Alex<br>Deskwell &lt;x&gt;')
   })
+  it('keeps pasted HTML but strips anything live', () => {
+    const out = signatureHtml('<table><tr><td style="color:#000">Hi <img src="https://x/y.png" onerror="alert(1)"></td></tr></table><script>x()</script>')
+    expect(out).toContain('<table')
+    expect(out).toContain('https://x/y.png')
+    expect(out).not.toMatch(/onerror|<script/i)
+  })
 })
 
 describe('cleanSubject', () => {

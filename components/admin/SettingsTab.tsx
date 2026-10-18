@@ -467,7 +467,7 @@ function AssistantSection() {
             <textarea rows={5} value={draft.emailSignature} onChange={(e) => set('emailSignature', e.target.value)} />
             <p className="field-hint">
               Added to the end of every email the assistant sends, for example a name, job title and phone number. Plain
-              text; new lines are kept. Leave empty for no signature.
+              text (new lines are kept) or pasted HTML. Leave empty for no signature.
             </p>
           </div>
         </div>

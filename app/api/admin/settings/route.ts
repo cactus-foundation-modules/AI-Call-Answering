@@ -78,7 +78,7 @@ const Body = z.object({
   businessName: z.string().trim().max(120).optional(),
   greeting: z.string().trim().max(600).optional(),
   extraInstructions: z.string().max(4000).optional(),
-  emailSignature: z.string().max(1500).optional(),
+  emailSignature: z.string().max(10000).optional(),
   maxCallMinutes: z.number().int().min(1).max(MAX_CALL_MINUTES_LIMIT).optional(),
 })
 

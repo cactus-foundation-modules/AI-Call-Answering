@@ -1,4 +1,5 @@
 import { escapeHtml } from '@/lib/email/render'
+import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { sendTemplateEmail } from '@/lib/email'
 import { getSiteUrl } from '@/lib/config/env'
 import { getShopConfigCached } from '@/modules/shop/lib/config'
@@ -40,10 +41,16 @@ export function textToHtml(text: string): string {
   return paragraphs.map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('')
 }
 
-/** The signature, or '' for none. A rule above it keeps it apart from the note. */
+/** The signature, or '' for none. Plain text is escaped with its line breaks
+ *  kept; a signature pasted as HTML (it starts with a tag) is sanitised the way
+ *  an inbox signature is and used as written. */
 export function signatureHtml(signature: string): string {
   const body = signature.replace(/\r\n?/g, '\n').trim()
   if (!body) return ''
+  if (/^<[a-z!]/i.test(body)) {
+    const html = sanitizeEmailHtml(body)
+    return html ? `<div style="margin:24px 0 0;">${html}</div>` : ''
+  }
   return `<p style="margin:24px 0 0;">${escapeHtml(body).replace(/\n/g, '<br>')}</p>`
 }
 
