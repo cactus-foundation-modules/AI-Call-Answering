@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanSubject, pickRecipient, productsHtml, signatureHtml, textToHtml } from './call-email'
+import { cleanSubject, pickRecipient, signatureHtml, textToHtml } from './call-email'
 import type { CallRecord } from './calls'
 
 const call = (over: Partial<CallRecord> = {}) =>
@@ -38,13 +38,5 @@ describe('pickRecipient', () => {
     expect(pickRecipient(c, null)).toEqual({ email: 'jo@example.com', fromOrder: true })
     expect(pickRecipient(call({ callerEmail: 'cb@example.com' }), 'not an email')).toEqual({ email: 'cb@example.com', fromOrder: false })
     expect(pickRecipient(call(), null)).toBeNull()
-  })
-})
-
-describe('productsHtml', () => {
-  it('links each product with its price', () => {
-    const html = productsHtml([{ name: 'Desk "A"', price: '£100', basis: 'excluding VAT', url: 'https://x.test/desk' }])
-    expect(html).toContain('<a href="https://x.test/desk">Desk &quot;A&quot;</a> - £100 excluding VAT')
-    expect(productsHtml([])).toBe('')
   })
 })

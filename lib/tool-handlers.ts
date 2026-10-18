@@ -43,7 +43,10 @@ const SearchInput = CallIdentity.extend({
   query: z.string().trim().min(1).max(200),
   max_price: z.number().positive().max(1_000_000).optional(),
 })
-const ProductInput = CallIdentity.extend({ product_id: z.string().trim().min(1).max(100) })
+const ProductInput = CallIdentity.extend({
+  product_id: z.string().trim().min(1).max(100),
+  options: z.string().trim().max(200).optional(),
+})
 const NoInput = CallIdentity
 const FaqInput = CallIdentity.extend({
   category: z.string().trim().max(200).optional(),
@@ -219,7 +222,7 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
     case 'get_product': {
       const input = ProductInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
-      const detail = await getProductDetail(input.data.product_id)
+      const detail = await getProductDetail(input.data.product_id, blankToNull(input.data.options))
       return {
         result: detail
           ? { ok: true, product: detail }

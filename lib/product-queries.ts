@@ -15,6 +15,7 @@ import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { describeForecast, loadDeliveryForecast, type SpokenDeliveryService } from './delivery-forecast'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
+import type { ProductRef } from '@/modules/unified-inbox/lib/products'
 
 // ---------------------------------------------------------------------------
 // What the assistant can find out about the shop's products.
@@ -42,6 +43,10 @@ export type ProductSummary = {
   availability: string
   category: string | null
   summary: string
+  /** True for a listing whose price is set by its variations. `price` is then a
+   *  range ("from £90 to £140"), because the listing's own price is a figure the
+   *  storefront never shows, and the exact price is one get_product call away. */
+  hasVariations: boolean
 }
 
 const tableExistsCache = new Map<string, boolean>()
@@ -75,13 +80,40 @@ type ProductRow = {
   category_name: string | null
 }
 
-function toSummary(row: ProductRow, symbol: string): ProductSummary {
+type VariationSpread = { low: number; high: number; count: number }
+
+/** The cheapest and dearest switched-on variation of each listing that has any. A
+ *  listing's own price is usually zero - its variations set the price - so quoting
+ *  it would tell the caller everything costs nothing. */
+async function variationSpreads(productIds: string[]): Promise<Map<string, VariationSpread>> {
+  const out = new Map<string, VariationSpread>()
+  if (productIds.length === 0 || !(await tableExists('svr_variants'))) return out
+  const rows = await prisma.$queryRaw<Array<{ product_id: string; low: unknown; high: unknown; count: unknown }>>(Prisma.sql`
+    SELECT sv."product_id",
+           MIN(COALESCE(NULLIF(child."sale_price", 0), child."price")) AS low,
+           MAX(COALESCE(NULLIF(child."sale_price", 0), child."price")) AS high,
+           COUNT(*)::int AS count
+    FROM "svr_variants" sv JOIN "shp_products" child ON child."id" = sv."child_product_id"
+    WHERE sv."product_id" IN (${Prisma.join(productIds)}) AND sv."enabled" = true AND child."status" = 'ACTIVE'
+    GROUP BY sv."product_id"
+  `)
+  for (const row of rows) {
+    const low = numberOrNull(row.low)
+    const high = numberOrNull(row.high)
+    const count = numberOrNull(row.count) ?? 0
+    if (low !== null && high !== null && count > 0) out.set(row.product_id, { low, high, count })
+  }
+  return out
+}
+
+function toSummary(row: ProductRow, symbol: string, spread: VariationSpread | null = null): ProductSummary {
   const { now, was } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
   return {
     id: row.id,
     name: row.name,
-    price: formatPrice(now, symbol),
-    wasPrice: was === null ? null : formatPrice(was, symbol),
+    price: spread ? describePriceRange(spread, symbol) : formatPrice(now, symbol),
+    wasPrice: spread || was === null ? null : formatPrice(was, symbol),
+    hasVariations: spread !== null,
     availability: stockSummary({
       trackInventory: row.track_inventory,
       stockCount: row.stock_count,
@@ -143,14 +175,16 @@ export async function searchProducts(query: string, maxPrice: number | null): Pr
     rows = await runSearch(tokens, maxPrice, false)
     loosened = rows.length > 0
   }
-  const products = rows.map((row) => toSummary(row, config.currencySymbol))
+  const spreads = await variationSpreads(rows.map((row) => row.id))
+  const products = rows.map((row) => toSummary(row, config.currencySymbol, spreads.get(row.id) ?? null))
   const basis = priceBasis(config.taxMode)
   if (products.length === 0) {
     return { products, note: 'No matching products. Try fewer or different words, or list the categories.' }
   }
+  const ranged = products.some((product) => product.hasVariations)
   return {
     products,
-    note: `Prices are ${basis}.${loosened ? ' These match only some of the words searched for, so check they suit.' : ''}`,
+    note: `Prices are ${basis}.${ranged ? ' A price given as a range belongs to a product sold in several variations: call get_product with the options the caller wants to get the exact price.' : ''}${loosened ? ' These match only some of the words searched for, so check they suit.' : ''}`,
   }
 }
 
@@ -185,6 +219,10 @@ export type ProductDetail = ProductSummary & {
   preOrderDispatch: string | null
   options: Array<{ name: string; values: string[] }>
   priceRange: string | null
+  variationCount: number
+  /** The variations that fit the options asked for, each with its own id and
+   *  exact price. Only present when get_product was given options. */
+  matchingVariations: VariationMatch[] | null
   specifications: Array<{ name: string; values: string[] }>
   questionsAnswered: Array<{ question: string; answer: string }>
   /** Every delivery service the shop offers this product, as the product page
@@ -228,17 +266,74 @@ async function loadOptions(productId: string): Promise<Array<{ name: string; val
   return rows.map((row) => ({ name: row.name, values: row.labels.slice(0, 25) }))
 }
 
-async function loadVariationPrices(productId: string, symbol: string): Promise<string | null> {
-  if (!(await tableExists('svr_variants'))) return null
-  const rows = await prisma.$queryRaw<Array<{ low: unknown; high: unknown }>>`
-    SELECT MIN(COALESCE(NULLIF(child."sale_price", 0), child."price")) AS low,
-           MAX(COALESCE(NULLIF(child."sale_price", 0), child."price")) AS high
+export type VariationMatch = {
+  /** Pass this to email_summary as the product id to link this exact variation. */
+  id: string
+  options: string
+  price: string
+  wasPrice: string | null
+  availability: string
+}
+
+type VariationRow = {
+  id: string
+  name: string
+  price: unknown
+  sale_price: unknown
+  track_inventory: boolean
+  stock_count: number | null
+  low_stock_threshold: number | null
+  out_of_stock_behaviour: string | null
+  is_pre_order: boolean
+  options: string | null
+}
+
+const MAX_MATCHING_VARIATIONS = 8
+
+/** The switched-on variations of a listing whose options contain every word the
+ *  caller used ("black high back"), each with its own price. Empty list for no
+ *  match; null when the words are all filler and nothing can be narrowed. */
+async function findVariations(
+  productId: string,
+  wanted: string,
+  symbol: string,
+): Promise<{ matches: VariationMatch[]; total: number } | null> {
+  const tokens = searchTokens(wanted, 10)
+  if (tokens.length === 0 || !(await tableExists('svr_variants'))) return null
+  const rows = await prisma.$queryRaw<VariationRow[]>`
+    SELECT child."id", child."name", child."price", child."sale_price", child."track_inventory",
+           child."stock_count", child."low_stock_threshold", child."out_of_stock_behaviour", child."is_pre_order",
+           (SELECT string_agg(ov."label", ' / ' ORDER BY o."position", ov."position")
+              FROM "svr_variant_values" vv
+              JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+              JOIN "svr_options" o ON o."id" = ov."option_id"
+             WHERE vv."variant_id" = sv."id") AS options
     FROM "svr_variants" sv JOIN "shp_products" child ON child."id" = sv."child_product_id"
     WHERE sv."product_id" = ${productId} AND sv."enabled" = true AND child."status" = 'ACTIVE'
+    ORDER BY sv."position", child."name"
+    LIMIT 1000
   `
-  const low = numberOrNull(rows[0]?.low)
-  const high = numberOrNull(rows[0]?.high)
-  return low === null || high === null ? null : describePriceRange({ low, high }, symbol)
+  const fits = rows.filter((row) => {
+    const haystack = `${row.options ?? ''} ${row.name}`.toLowerCase()
+    return tokens.every((token) => haystack.includes(token))
+  })
+  const matches = fits.slice(0, MAX_MATCHING_VARIATIONS).map((row): VariationMatch => {
+    const { now, was } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
+    return {
+      id: row.id,
+      options: row.options ?? row.name,
+      price: formatPrice(now, symbol),
+      wasPrice: was === null ? null : formatPrice(was, symbol),
+      availability: stockSummary({
+        trackInventory: row.track_inventory,
+        stockCount: row.stock_count,
+        lowStockThreshold: row.low_stock_threshold,
+        outOfStockBehaviour: row.out_of_stock_behaviour,
+        isPreOrder: row.is_pre_order,
+      }),
+    }
+  })
+  return { matches, total: fits.length }
 }
 
 async function loadSpecifications(productId: string): Promise<Array<{ name: string; values: string[] }>> {
@@ -269,7 +364,7 @@ function describeDimensions(row: DetailRow): string | null {
   return `${parts.filter((part): part is string => part !== null).join(', ')} ${unit}`.trim()
 }
 
-export async function getProductDetail(productId: string): Promise<ProductDetail | null> {
+export async function getProductDetail(productId: string, wantedOptions: string | null = null): Promise<ProductDetail | null> {
   const rows = await prisma.$queryRaw<DetailRow[]>`
     SELECT p."id", p."name", p."price", p."sale_price", p."short_description", p."description", p."type",
            p."track_inventory", p."stock_count", p."low_stock_threshold", p."out_of_stock_behaviour",
@@ -285,26 +380,30 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
   if (!row) return null
 
   const config = await getShopConfigCached()
-  const [options, priceRange, specifications, deliveryServices, forecast, questionsAnswered] = await Promise.all([
+  const [options, spreads, specifications, deliveryServices, forecast, questionsAnswered, found] = await Promise.all([
     loadOptions(productId),
-    loadVariationPrices(productId, config.currencySymbol),
+    variationSpreads([productId]),
     loadSpecifications(productId),
     loadDeliveryServices(productId, config.currencySymbol),
     loadDeliveryForecast(productId),
     loadProductFaqs(productId, row.faqs),
+    wantedOptions ? findVariations(productId, wantedOptions, config.currencySymbol) : Promise.resolve(null),
   ])
+  const spread = spreads.get(productId) ?? null
   const weight = numberOrNull(row.weight)
   const deliveryByVariation = forecast ? describeForecast(forecast, config.currencySymbol, config.taxMode) : []
 
   return {
-    ...toSummary(row, config.currencySymbol),
+    ...toSummary(row, config.currencySymbol, spread),
     description: truncate(plainText(row.description) || plainText(row.short_description), DESCRIPTION_CHARS),
     dimensions: describeDimensions(row),
     weight: weight === null ? null : `${weight} ${row.weight_unit ?? ''}`.trim(),
     minimumOrder: row.min_order_quantity && row.min_order_quantity > 1 ? row.min_order_quantity : null,
     preOrderDispatch: row.pre_order_dispatch_date ? row.pre_order_dispatch_date.toISOString().slice(0, 10) : null,
     options,
-    priceRange: options.length > 0 ? priceRange : null,
+    priceRange: spread && options.length > 0 ? describePriceRange(spread, config.currencySymbol) : null,
+    variationCount: spread?.count ?? 0,
+    matchingVariations: found ? found.matches : null,
     specifications,
     questionsAnswered,
     deliveryServices: deliveryByVariation.length > 0 ? [] : deliveryServices,
@@ -314,33 +413,51 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
       : deliveryServices.length > 0
         ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
         : 'No delivery timing is published for this product. Do not guess one; offer a callback.',
-    priceNote: `Prices are ${priceBasis(config.taxMode)}.`,
+    priceNote: priceNote(spread, found, wantedOptions, priceBasis(config.taxMode)),
   }
 }
 
-export type ProductLinkRow = { id: string; name: string; slug: string; price: string; basis: string }
+/** What the model must do about price, given what was asked. A listing sold in
+ *  variations has no single price: until the caller's options pin one down, only
+ *  the range may be spoken, and it must be called a range. */
+function priceNote(
+  spread: VariationSpread | null,
+  found: { matches: VariationMatch[]; total: number } | null,
+  wantedOptions: string | null,
+  basis: string,
+): string {
+  const base = `Prices are ${basis}.`
+  if (!spread) return base
+  if (!wantedOptions || found === null) {
+    return `${base} This product is sold in ${spread.count} variations and the price depends on which is chosen, so the price above is a range. If the caller has named any options (colour, size, back height), call get_product again with those words in "options" to get the exact price of that variation. Never quote the range as if it were the price of their choice.`
+  }
+  if (found.matches.length === 0) {
+    return `${base} No variation matches those options. Check the option values listed above and try again with words from them, or tell the caller you cannot find that combination.`
+  }
+  if (found.total > found.matches.length) {
+    return `${base} ${found.total} variations fit those words and only ${found.matches.length} are listed. Ask the caller which option is still undecided, then call get_product again with more words in "options".`
+  }
+  if (found.matches.length === 1) {
+    return `${base} Quote the price in matchingVariations: it is the exact price of what the caller asked about. Use its id in email_summary product_ids, not the product id.`
+  }
+  return `${base} Several variations fit. Quote the price of each that matters, or ask which one they want. Use the id of the chosen variation in email_summary product_ids, not the product id.`
+}
 
-/** Name, price and page address for products the assistant discussed, looked up
- *  by id so the email never repeats a price or link the model made up. Anything
- *  that is not a visible product is dropped. */
-export async function getProductLinks(ids: string[]): Promise<ProductLinkRow[]> {
+/** What the assistant discussed, as references the unified inbox can print. An id
+ *  is a variation when shop-variations lists it as a child, otherwise a product.
+ *  Whether either is visible, priced or linkable is the inbox's call, made when
+ *  the email goes: nothing the model wrote reaches the email. */
+export async function toProductRefs(ids: string[]): Promise<ProductRef[]> {
   const wanted = [...new Set(ids.map((id) => id.trim()).filter((id) => id !== ''))]
   if (wanted.length === 0) return []
-  const rows = await prisma.$queryRaw<Array<{ id: string; name: string; slug: string; price: unknown; sale_price: unknown }>>(Prisma.sql`
-    SELECT p."id", p."name", p."slug", p."price", p."sale_price"
-    FROM "shp_products" p
-    WHERE ${VISIBLE} AND p."id" IN (${Prisma.join(wanted)})
-  `)
-  const config = await getShopConfigCached()
-  const byId = new Map(rows.map((row) => [row.id, row]))
-  const out: ProductLinkRow[] = []
-  for (const id of wanted) {
-    const row = byId.get(id)
-    if (!row) continue
-    const { now } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
-    out.push({ id: row.id, name: row.name, slug: row.slug, price: formatPrice(now, config.currencySymbol), basis: priceBasis(config.taxMode) })
+  const children = new Set<string>()
+  if (await tableExists('svr_variants')) {
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "child_product_id" AS id FROM "svr_variants" WHERE "child_product_id" IN (${Prisma.join(wanted)})
+    `)
+    for (const row of rows) children.add(row.id)
   }
-  return out
+  return wanted.map((id) => ({ moduleName: 'shop', kind: children.has(id) ? 'variation' : 'product', id }))
 }
 
 export async function listTopCategories(): Promise<Array<{ name: string; description: string }>> {

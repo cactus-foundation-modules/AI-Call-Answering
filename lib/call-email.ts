@@ -1,11 +1,10 @@
 import { escapeHtml } from '@/lib/email/render'
 import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { sendTemplateEmail } from '@/lib/email'
-import { getSiteUrl } from '@/lib/config/env'
-import { getShopConfigCached } from '@/modules/shop/lib/config'
-import { productUrl } from '@/modules/shop/lib/product-url'
+import { renderProductTable } from '@/modules/unified-inbox/lib/products/render'
+import { resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
-import { getProductLinks } from './product-queries'
+import { toProductRefs } from './product-queries'
 import { getSettings } from './settings'
 import { isPlausibleEmail } from './text'
 
@@ -20,7 +19,10 @@ import { isPlausibleEmail } from './text'
 // The words are the model's, but only ever as escaped text: nothing it writes
 // can become markup, and the products are looked up by id here rather than
 // described by the model, so a link or a price in the email is always the
-// shop's own. Order details are never part of it - the tool's description says
+// shop's own. They are printed by the unified inbox's own product table, so the
+// email shows them exactly as a product attached to a reply does: photograph,
+// linked name, the options of a variation, and the price with "+ VAT" where the
+// shop quotes net prices. Order details are never part of it - the tool's description says
 // so, and the address may be one the caller merely spoke.
 // ---------------------------------------------------------------------------
 
@@ -75,14 +77,6 @@ export function pickRecipient(call: CallRecord, given: string | null): { email: 
   return null
 }
 
-export type ProductLink = { name: string; price: string; basis: string; url: string }
-
-export function productsHtml(products: ProductLink[]): string {
-  const items = products.map((p) =>
-    `<li><a href="${escapeHtml(p.url)}">${escapeHtml(p.name)}</a> - ${escapeHtml(p.price)} ${escapeHtml(p.basis)}</li>`)
-  return items.length > 0 ? `<ul>${items.join('')}</ul>` : ''
-}
-
 export type SummaryInput = {
   email: string | null
   name: string | null
@@ -109,16 +103,10 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   const summary = input.summary.trim().slice(0, SUMMARY_MAX)
   if (!summary) return { ok: false, message: 'There was nothing to put in the email. Write a short note of what was discussed and retry.' }
 
-  const [settings, config] = await Promise.all([getSettings(), getShopConfigCached()])
-  const siteUrl = getSiteUrl()
-  const found = await getProductLinks(input.productIds.slice(0, MAX_PRODUCTS_PER_EMAIL))
-  const links: ProductLink[] = found.map((p) => ({
-    name: p.name,
-    price: p.price,
-    basis: p.basis,
-    url: productUrl(siteUrl, p.slug, config.productUrlStyle),
-  }))
-  const listing = productsHtml(links)
+  const settings = await getSettings()
+  const refs = await toProductRefs(input.productIds.slice(0, MAX_PRODUCTS_PER_EMAIL))
+  const resolved = await resolveProducts(refs)
+  const listing = renderProductTable(resolved.map((entry) => entry.choice))
 
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
     customerName: input.name?.trim() || (recipient.fromOrder ? call.verifiedContact.name : '') || call.callerName || 'there',
