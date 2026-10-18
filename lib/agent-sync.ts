@@ -6,6 +6,7 @@ import {
   createAgent,
   createPostCallWebhook,
   createTool,
+  postCallWebhookExists,
   addLibraryVoice,
   findLibraryOrigin,
   listVoices,
@@ -117,6 +118,9 @@ async function provisionAccount(
 ): Promise<{ agentId: string; created: boolean; webhookId: string; webhookSecret: string | null; toolIds: Record<string, string>; syncedHash: string }> {
   let webhookId = existing.webhookId
   let webhookSecret: string | null = null
+  // The stored ids may be another ElevenLabs account's (the key was swapped):
+  // an id this account does not hold is made again rather than failing.
+  if (webhookId && !(await postCallWebhookExists(apiKey, webhookId))) webhookId = null
   if (!webhookId) {
     const webhook = await createPostCallWebhook(apiKey, 'Cactus call answering', postCallWebhookUrl(siteUrl))
     webhookId = webhook.id

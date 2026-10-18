@@ -247,6 +247,16 @@ export async function createPostCallWebhook(
   return { id: created.webhook_id, secret: created.webhook_secret ?? null }
 }
 
+const WebhookList = z.object({ webhooks: z.array(z.object({ webhook_id: z.string() })).default([]) })
+
+/** Whether this account still holds the webhook. Ids belong to one account, so
+ *  after the API key is swapped for another account's the stored id points at
+ *  nothing and the agent cannot be made against it. */
+export async function postCallWebhookExists(apiKey: string, webhookId: string): Promise<boolean> {
+  const list = await sendJson(apiKey, '/v1/workspace/webhooks', WebhookList)
+  return (list.webhooks ?? []).some((webhook) => webhook.webhook_id === webhookId)
+}
+
 // -- tools --------------------------------------------------------------------
 
 const ToolResponse = z.object({ id: z.string() })
@@ -294,7 +304,13 @@ const SubscriptionResponse = z.object({
   can_extend_character_limit: z.boolean().nullish(),
 })
 
-/** True when the account has used all its credit and may not go over. Null when
+/** Below this share of the allowance an account is treated as spent. ElevenLabs
+ *  takes a call from an account that is nearly empty and drops it a few seconds
+ *  in, which is worse for the caller than passing over the key. */
+export const LOW_CREDIT_SHARE = 0.02
+
+/** True when the account has used all its credit and may not go over, or has so
+ *  little left that a call would not finish. Null when
  *  that cannot be told (key lacks permission to read it, ElevenLabs slow): the
  *  caller then carries on and tries the call. */
 export async function isOutOfCredit(apiKey: string, timeoutMs = 2_000): Promise<boolean | null> {
@@ -302,7 +318,8 @@ export async function isOutOfCredit(apiKey: string, timeoutMs = 2_000): Promise<
     const sub = await sendJson(apiKey, '/v1/user/subscription', SubscriptionResponse, { timeoutMs })
     if (typeof sub.character_count !== 'number' || typeof sub.character_limit !== 'number') return null
     if (sub.character_limit <= 0) return null
-    return sub.character_count >= sub.character_limit && sub.can_extend_character_limit !== true
+    if (sub.can_extend_character_limit === true) return false
+    return sub.character_limit - sub.character_count <= sub.character_limit * LOW_CREDIT_SHARE
   } catch {
     return null
   }
