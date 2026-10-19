@@ -49,7 +49,7 @@ describe('claimMatchesOrder', () => {
 
 describe('wording', () => {
   it('describes statuses', () => {
-    expect(orderStatusWords('SHIPPED', 'PAID')).toBe('dispatched and on its way')
+    expect(orderStatusWords('SHIPPED', 'PAID')).toBe('dispatched')
     expect(orderStatusWords('PENDING', 'PENDING')).toBe('received, waiting for payment to clear')
     expect(orderStatusWords('WEIRD_NEW', 'PAID')).toBe('weird new')
   })

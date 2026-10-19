@@ -59,7 +59,10 @@ const OrderInput = CallIdentity.extend({
   email: z.string().trim().max(320).optional(),
   company_name: z.string().trim().max(160).optional(),
 })
-const OrderLinkInput = CallIdentity.extend({ order_number: z.string().trim().max(60).optional() })
+const OrderLinkInput = CallIdentity.extend({
+  order_number: z.string().trim().max(60).optional(),
+  send_to: z.string().trim().max(320).optional(),
+})
 const SummaryInput = CallIdentity.extend({
   email: z.string().trim().max(320).optional(),
   name: z.string().trim().max(120).optional(),
@@ -92,6 +95,14 @@ async function resolveCall(identity: z.infer<typeof CallIdentity>): Promise<Call
 
 function blankToNull(value: string | undefined): string | null {
   return value && value.trim() !== '' ? value.trim() : null
+}
+
+/** The addresses on the matched orders, handed over only when there is a choice
+ *  to put to the caller. With one address the assistant never needs to see it. */
+function emailsOnFile(emails: readonly string[]): ToolResult {
+  return emails.length > 1
+    ? { emailsOnFile: emails, emailNote: 'These orders carry different email addresses. Whenever an email is to be sent, read each address out naturally (do not spell it letter by letter) and ask which one they want it sent to.' }
+    : {}
 }
 
 async function runOrderLookup(input: z.infer<typeof OrderInput>): Promise<ToolResult> {
@@ -130,6 +141,7 @@ async function runOrderLookup(input: z.infer<typeof OrderInput>): Promise<ToolRe
     matched: true,
     orders: outcome.orders,
     contactOnFile,
+    ...emailsOnFile(outcome.emails),
     note: contactOnFile
       ? 'This caller\'s name, email and phone number are already on the order. If you need to arrange a callback, do not ask for them again: call save_callback with just the reason.'
       : 'The order has no usable contact details, so a callback will need the caller\'s name and email.',
@@ -161,6 +173,7 @@ async function runCallerOrderLookup(input: z.infer<typeof NoInput>): Promise<Too
     recognisedByPhoneNumber: true,
     orders: outcome.orders,
     contactOnFile,
+    ...emailsOnFile(outcome.emails),
     note: [
       'This caller is recognised by the number they rang from, so do NOT ask for a postcode, order number, email or company name.',
       several
@@ -178,7 +191,7 @@ async function runEmailOrderLink(input: z.infer<typeof OrderLinkInput>): Promise
   const call = await resolveCall(input)
   if (!call) return { ok: false, message: 'Emailing a link only works on a live phone call. Offer a callback instead.' }
   try {
-    const outcome = await emailOrderLink(call, blankToNull(input.order_number))
+    const outcome = await emailOrderLink(call, blankToNull(input.order_number), blankToNull(input.send_to))
     if (!outcome.ok) return outcome
     return { ok: true, message: 'Sent to the email address on the order. Tell the caller it is on its way and may take a minute or two, and to check their junk folder if it does not appear. Do not read the address out.' }
   } catch {

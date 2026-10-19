@@ -14,6 +14,14 @@ import { parseConsignmentParcels } from '@/modules/shop/lib/consignment-parcels-
 import { describeDeliveryMoment, describeParcels, describePlaced, summariseParcels, type ParcelFacts } from './delivery-words'
 import type { VerifiedContact } from './calls'
 import { normaliseCompany, normaliseOrderNumber, phoneMatchKey } from './text'
+import {
+  chargeStatusWords,
+  describeRequest,
+  distinctEmails,
+  lineChoices,
+  refundStatusWords,
+  type RequestFacts,
+} from './order-detail'
 
 // ---------------------------------------------------------------------------
 // Looking an order up for a caller who has said who they are.
@@ -23,7 +31,9 @@ import { normaliseCompany, normaliseOrderNumber, phoneMatchKey } from './text'
 // the full claim in order-verify.ts. Only an order that passes is read in
 // detail, and the detail deliberately leaves out email, phone, street address
 // and tracking numbers - a caller who has proved the postcode is told the town
-// and the progress, not handed the customer record.
+// and the progress, not handed the customer record. The one exception is the
+// email addresses on the orders, and only when there is more than one: the
+// assistant has to read them out so the caller can say where a link goes.
 // ---------------------------------------------------------------------------
 
 const CANDIDATE_LIMIT = 25
@@ -100,7 +110,38 @@ export type VerifiedOrder = {
   payment: string
   total: string
   deliveringTo: string | null
-  items: Array<{ name: string; quantity: number }>
+  /** Money in words, as the order records it. Null where there is none. */
+  breakdown: {
+    subtotal: string
+    discount: string | null
+    couponCode: string | null
+    delivery: string | null
+    deliveryService: string | null
+    tax: string | null
+    paymentMethod: string | null
+  }
+  deliveryInstructions: string | null
+  customerReference: string | null
+  items: Array<{
+    name: string
+    quantity: number
+    sku: string | null
+    unitPrice: string
+    lineTotal: string
+    /** What was chosen on the line (colour, size, delivery option). */
+    choices: string[]
+    refundedQuantity: number
+    preOrderDispatch: string | null
+    returnable: boolean
+    notReturnableBecause: string | null
+  }>
+  refunds: Array<{ amount: string; status: string; date: string }>
+  requests: RequestFacts[]
+  /** Extra charges raised on the order after it was placed. */
+  extraCharges: Array<{ reason: string; total: string; status: string }>
+  /** Notes the team left that the customer can see, newest first. */
+  notesFromTeam: Array<{ date: string; text: string }>
+  invoiceAvailable: boolean
   deliveries: Array<{
     carrier: string | null
     dispatched: string
@@ -112,11 +153,24 @@ export type VerifiedOrder = {
     /** Present only for a delivery the courier split into several parcels. */
     parcels: ParcelFacts[] | null
     parcelSummary: string | null
+    /** A delay the courier or the team has flagged, in words. */
+    delay: string | null
+    signedBy: string | null
+    outForDelivery: boolean
+    stopsAway: number | null
+    minutesAway: number | null
   }>
 }
 
 export type OrderLookupOutcome =
-  | { matched: true; orders: VerifiedOrder[]; internalNumbers: string[]; contact: VerifiedContact | null }
+  | {
+      matched: true
+      orders: VerifiedOrder[]
+      internalNumbers: string[]
+      contact: VerifiedContact | null
+      /** Every distinct address on the matched orders. */
+      emails: string[]
+    }
   | { matched: false }
 
 type OrderRow = {
@@ -126,6 +180,15 @@ type OrderRow = {
   payment_status: string
   created_at: Date
   total: unknown
+  subtotal: unknown
+  discount_amount: unknown
+  shipping_amount: unknown
+  tax_amount: unknown
+  coupon_code: string | null
+  payment_method: string | null
+  shipping_rate_name: string | null
+  delivery_instructions: string | null
+  customer_reference: string | null
   currency: string
   shipping_address: unknown
   customer_name: string | null
@@ -133,7 +196,25 @@ type OrderRow = {
   customer_phone: string | null
 }
 
-type ItemRow = { order_id: string; product_name: string; quantity: number }
+type ItemRow = {
+  order_id: string
+  product_name: string
+  quantity: number
+  product_sku: string | null
+  unit_price: unknown
+  total: unknown
+  refunded_qty: number
+  is_pre_order: boolean
+  pre_order_dispatch_date: Date | null
+  line_meta: unknown
+  returnable: boolean
+  non_returnable_note: string | null
+}
+
+type RefundRow = { order_id: string; amount: unknown; status: string; created_at: Date }
+type RequestRow = { order_id: string; type: string; status: string; created_at: Date }
+type ChargeRow = { order_id: string; reason: string; total: unknown; status: string }
+type NoteRow = { order_id: string; content: string; created_at: Date }
 
 type ShipmentRow = {
   order_id: string
@@ -145,6 +226,12 @@ type ShipmentRow = {
   delivery_slot_end: string | null
   delivered_at: Date | null
   consignment_parcels: unknown
+  delivery_delay: string | null
+  delivery_delay_note: string | null
+  signed_by: string | null
+  carrier_out_for_delivery: boolean | null
+  drops_away: number | null
+  minutes_to_stop: number | null
 }
 
 function day(date: Date): string {
@@ -201,25 +288,87 @@ export async function lookupOrdersByCallerNumber(fromNumber: string): Promise<Or
   return readOrders(rows.map((row) => row.id))
 }
 
+function money(value: unknown, order: OrderRow, symbol: string): string {
+  return formatPrice(Number(value), order.currency === 'GBP' ? symbol : `${order.currency} `)
+}
+
+function moneyOrNull(value: unknown, order: OrderRow, symbol: string): string | null {
+  return Number(value) > 0 ? money(value, order, symbol) : null
+}
+
+function delayWords(row: ShipmentRow): string | null {
+  const parts = [row.delivery_delay?.trim(), row.delivery_delay_note?.trim()].filter((part): part is string => !!part)
+  return parts.length > 0 ? parts.join(': ') : null
+}
+
+/** The email address of each order, for a caller who has verified them. Used
+ *  when an email must go to one of the addresses on file. */
+export async function emailsOnOrders(orderNumbers: readonly string[]): Promise<string[]> {
+  if (orderNumbers.length === 0) return []
+  const rows = await prisma.$queryRaw<Array<{ customer_email: string }>>(Prisma.sql`
+    SELECT "customer_email" FROM "shp_orders"
+    WHERE "kind" = 'SALE' AND "order_number" IN (${Prisma.join([...orderNumbers])})
+    ORDER BY "created_at" DESC
+  `)
+  return distinctEmails(rows.map((row) => row.customer_email))
+}
+
+/** The name on the newest order using this address. */
+export async function nameOnOrderEmail(orderNumbers: readonly string[], email: string): Promise<string> {
+  if (orderNumbers.length === 0) return ''
+  const rows = await prisma.$queryRaw<Array<{ customer_name: string | null }>>(Prisma.sql`
+    SELECT "customer_name" FROM "shp_orders"
+    WHERE "order_number" IN (${Prisma.join([...orderNumbers])}) AND lower("customer_email") = ${email.trim().toLowerCase()}
+    ORDER BY "created_at" DESC LIMIT 1
+  `)
+  return rows[0]?.customer_name?.trim() ?? ''
+}
+
 async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
-  const [orders, items, shipments, config, timezone] = await Promise.all([
+  const [orders, items, shipments, refunds, requests, charges, notes, invoices, config, timezone] = await Promise.all([
     prisma.$queryRaw<OrderRow[]>(Prisma.sql`
-      SELECT o."id", o."order_number", o."status", o."payment_status", o."created_at", o."total", o."currency", o."shipping_address",
+      SELECT o."id", o."order_number", o."status", o."payment_status", o."created_at", o."total", o."subtotal",
+             o."discount_amount", o."shipping_amount", o."tax_amount", o."coupon_code", o."payment_method",
+             o."shipping_rate_name", o."delivery_instructions", o."customer_reference", o."currency", o."shipping_address",
              o."customer_name", o."customer_email", o."customer_phone"
       FROM "shp_orders" o WHERE o."id" IN (${Prisma.join(ids)}) ORDER BY o."created_at" DESC
     `),
     prisma.$queryRaw<ItemRow[]>(Prisma.sql`
-      SELECT "order_id", "product_name", "quantity"
+      SELECT "order_id", "product_name", "quantity", "product_sku", "unit_price", "total", "refunded_qty",
+             "is_pre_order", "pre_order_dispatch_date", "line_meta", "returnable", "non_returnable_note"
       FROM "shp_order_items" WHERE "order_id" IN (${Prisma.join(ids)})
     `),
     prisma.$queryRaw<ShipmentRow[]>(Prisma.sql`
       SELECT "order_id", "carrier", "shipped_at", "tracking_stage", "delivery_date",
-             "delivery_slot_start", "delivery_slot_end", "delivered_at", "consignment_parcels"
+             "delivery_slot_start", "delivery_slot_end", "delivered_at", "consignment_parcels",
+             "delivery_delay", "delivery_delay_note", "signed_by", "carrier_out_for_delivery", "drops_away", "minutes_to_stop"
       FROM "shp_shipments" WHERE "order_id" IN (${Prisma.join(ids)}) ORDER BY "shipped_at"
+    `),
+    prisma.$queryRaw<RefundRow[]>(Prisma.sql`
+      SELECT "order_id", "amount", "status", "created_at" FROM "shp_refunds"
+      WHERE "order_id" IN (${Prisma.join(ids)}) ORDER BY "created_at" DESC
+    `),
+    prisma.$queryRaw<RequestRow[]>(Prisma.sql`
+      SELECT "order_id", "type", "status", "created_at" FROM "shp_order_requests"
+      WHERE "order_id" IN (${Prisma.join(ids)}) ORDER BY "created_at" DESC
+    `),
+    prisma.$queryRaw<ChargeRow[]>(Prisma.sql`
+      SELECT "order_id", "reason", "total", "status" FROM "shp_order_charges"
+      WHERE "order_id" IN (${Prisma.join(ids)}) ORDER BY "created_at" DESC
+    `),
+    prisma.$queryRaw<NoteRow[]>(Prisma.sql`
+      SELECT "order_id", "content", "created_at" FROM "shp_order_notes"
+      WHERE "order_id" IN (${Prisma.join(ids)}) AND "is_internal" = false ORDER BY "created_at" DESC LIMIT 20
+    `),
+    prisma.$queryRaw<Array<{ order_id: string }>>(Prisma.sql`
+      SELECT DISTINCT "order_id" FROM "shp_invoices"
+      WHERE "order_id" IN (${Prisma.join(ids)}) AND "voided_at" IS NULL AND "superseded_at" IS NULL
     `),
     getShopConfigCached(),
     getSiteTimezone(),
   ])
+  const symbol = config.currencySymbol
+  const invoiced = new Set(invoices.map((row) => row.order_id))
 
   const verified: VerifiedOrder[] = orders.map((order) => ({
     orderNumber: order.order_number,
@@ -228,11 +377,45 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
     placedMonth: new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: timezone }).format(order.created_at),
     status: orderStatusWords(order.status, order.payment_status),
     payment: order.payment_status.toLowerCase().replace(/_/g, ' '),
-    total: formatPrice(Number(order.total), order.currency === 'GBP' ? config.currencySymbol : `${order.currency} `),
+    total: money(order.total, order, symbol),
     deliveringTo: addressField(order.shipping_address, 'city'),
+    breakdown: {
+      subtotal: money(order.subtotal, order, symbol),
+      discount: moneyOrNull(order.discount_amount, order, symbol),
+      couponCode: order.coupon_code?.trim() || null,
+      delivery: Number(order.shipping_amount) > 0 ? money(order.shipping_amount, order, symbol) : 'free',
+      deliveryService: order.shipping_rate_name?.trim() || null,
+      tax: moneyOrNull(order.tax_amount, order, symbol),
+      paymentMethod: order.payment_method?.trim().toLowerCase().replace(/_/g, ' ') || null,
+    },
+    deliveryInstructions: order.delivery_instructions?.trim() || null,
+    customerReference: order.customer_reference?.trim() || null,
     items: items
       .filter((item) => item.order_id === order.id)
-      .map((item) => ({ name: item.product_name, quantity: item.quantity })),
+      .map((item) => ({
+        name: item.product_name,
+        quantity: item.quantity,
+        sku: item.product_sku?.trim() || null,
+        unitPrice: money(item.unit_price, order, symbol),
+        lineTotal: money(item.total, order, symbol),
+        choices: lineChoices(item.line_meta),
+        refundedQuantity: item.refunded_qty,
+        preOrderDispatch: item.is_pre_order && item.pre_order_dispatch_date ? day(item.pre_order_dispatch_date) : null,
+        returnable: item.returnable,
+        notReturnableBecause: item.returnable ? null : item.non_returnable_note?.trim() || null,
+      })),
+    refunds: refunds
+      .filter((refund) => refund.order_id === order.id)
+      .map((refund) => ({ amount: money(refund.amount, order, symbol), status: refundStatusWords(refund.status), date: day(refund.created_at) })),
+    requests: requests.filter((request) => request.order_id === order.id).map(describeRequest),
+    extraCharges: charges
+      .filter((charge) => charge.order_id === order.id)
+      .map((charge) => ({ reason: charge.reason, total: money(charge.total, order, symbol), status: chargeStatusWords(charge.status) })),
+    notesFromTeam: notes
+      .filter((note) => note.order_id === order.id)
+      .slice(0, 5)
+      .map((note) => ({ date: day(note.created_at), text: note.content.trim().slice(0, 500) })),
+    invoiceAvailable: invoiced.has(order.id),
     deliveries: shipments
       .filter((shipment) => shipment.order_id === order.id)
       .map((shipment) => {
@@ -247,6 +430,11 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
           deliveredOn: !split && shipment.delivered_at ? describeDeliveryMoment(shipment.delivered_at, timezone) : null,
           parcels,
           parcelSummary: parcels ? summariseParcels(parcels) : null,
+          delay: delayWords(shipment),
+          signedBy: shipment.delivered_at && shipment.signed_by?.trim() ? shipment.signed_by.trim() : null,
+          outForDelivery: shipment.carrier_out_for_delivery === true && !shipment.delivered_at,
+          stopsAway: shipment.carrier_out_for_delivery === true && !shipment.delivered_at ? shipment.drops_away : null,
+          minutesAway: shipment.carrier_out_for_delivery === true && !shipment.delivered_at ? shipment.minutes_to_stop : null,
         }
       }),
   }))
@@ -255,5 +443,6 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
     orders: verified,
     internalNumbers: verified.map((order) => order.orderNumber),
     contact: sharedContact(orders),
+    emails: distinctEmails(orders.map((order) => order.customer_email)),
   }
 }

@@ -32,11 +32,15 @@ describe('cleanSubject', () => {
 })
 
 describe('pickRecipient', () => {
+  const c = call({ callerEmail: 'cb@example.com' })
   it('prefers the spoken address, then the order, then the callback', () => {
-    const c = call({ verifiedContact: { name: 'Jo', email: 'Jo@Example.com', phone: '' }, callerEmail: 'cb@example.com' })
-    expect(pickRecipient(c, 'Said@Example.com')).toEqual({ email: 'said@example.com', fromOrder: false })
-    expect(pickRecipient(c, null)).toEqual({ email: 'jo@example.com', fromOrder: true })
-    expect(pickRecipient(call({ callerEmail: 'cb@example.com' }), 'not an email')).toEqual({ email: 'cb@example.com', fromOrder: false })
-    expect(pickRecipient(call(), null)).toBeNull()
+    expect(pickRecipient(c, 'Said@Example.com', ['jo@example.com'])).toEqual({ email: 'said@example.com', fromOrder: false })
+    expect(pickRecipient(c, null, ['Jo@Example.com'])).toEqual({ email: 'jo@example.com', fromOrder: true })
+    expect(pickRecipient(c, 'not an email', [])).toEqual({ email: 'cb@example.com', fromOrder: false })
+    expect(pickRecipient(call(), null, [])).toBeNull()
+  })
+  it('asks which when the orders carry several addresses', () => {
+    expect(pickRecipient(c, null, ['a@example.com', 'b@example.com'])).toEqual({ ask: ['a@example.com', 'b@example.com'] })
+    expect(pickRecipient(c, 'B@example.com', ['a@example.com', 'b@example.com'])).toEqual({ email: 'b@example.com', fromOrder: true })
   })
 })

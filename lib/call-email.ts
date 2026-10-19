@@ -7,6 +7,8 @@ import { recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
 import { toProductRefs } from './product-queries'
 import { getSettings } from './settings'
 import { isPlausibleEmail } from './text'
+import { askWhichEmailMessage, chooseOrderEmail } from './email-choice'
+import { emailsOnOrders, nameOnOrderEmail } from './order-queries'
 
 // ---------------------------------------------------------------------------
 // Emailing a caller a written note of what was discussed on the phone.
@@ -63,18 +65,22 @@ export function cleanSubject(raw: string | undefined): string {
 }
 
 /** Who the email is for: an address the caller gave this time, else the one on
- *  the order they proved they own, else one left for a callback. */
-export function pickRecipient(call: CallRecord, given: string | null): { email: string; fromOrder: boolean } | null {
-  const candidates: Array<[string, boolean]> = [
-    [given ?? '', false],
-    [call.verifiedContact.email, true],
-    [call.callerEmail, false],
-  ]
-  for (const [value, fromOrder] of candidates) {
-    const email = value.trim().toLowerCase()
-    if (email && isPlausibleEmail(email)) return { email, fromOrder }
+ *  the order they proved they own (they are asked which when the orders carry
+ *  several), else one left for a callback. */
+export function pickRecipient(
+  call: Pick<CallRecord, 'callerEmail'>,
+  given: string | null,
+  orderEmails: readonly string[],
+): { email: string; fromOrder: boolean } | { ask: string[] } | null {
+  const spoken = (given ?? '').trim().toLowerCase()
+  if (spoken && isPlausibleEmail(spoken)) {
+    return { email: spoken, fromOrder: orderEmails.some((email) => email.toLowerCase() === spoken) }
   }
-  return null
+  const choice = chooseOrderEmail(orderEmails.filter(isPlausibleEmail), null)
+  if (choice.kind === 'use') return { email: choice.email.toLowerCase(), fromOrder: true }
+  if (choice.kind === 'ask') return { ask: choice.emails }
+  const callback = call.callerEmail.trim().toLowerCase()
+  return callback && isPlausibleEmail(callback) ? { email: callback, fromOrder: false } : null
 }
 
 export type SummaryInput = {
@@ -91,7 +97,8 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   if (call.emailsSent >= MAX_EMAILS_PER_CALL || (await recentEmailsFrom(call.fromNumber)) >= MAX_EMAILS_PER_NUMBER_PER_HOUR) {
     return { ok: false, message: 'Too many emails have been sent on this call. Do not try again. Offer a callback instead.' }
   }
-  const recipient = pickRecipient(call, input.email)
+  const recipient = pickRecipient(call, input.email, await emailsOnOrders(call.verifiedOrders))
+  if (recipient && 'ask' in recipient) return { ok: false, message: askWhichEmailMessage(recipient.ask) }
   if (!recipient) {
     return {
       ok: false,
@@ -109,7 +116,7 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   const listing = renderProductTable(resolved.map((entry) => entry.choice))
 
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
-    customerName: input.name?.trim() || (recipient.fromOrder ? call.verifiedContact.name : '') || call.callerName || 'there',
+    customerName: input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || 'there',
     subject: cleanSubject(input.subject),
     summaryHtml: textToHtml(summary),
     productsHtml: listing,

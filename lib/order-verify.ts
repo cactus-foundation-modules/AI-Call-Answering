@@ -63,7 +63,7 @@ export function orderStatusWords(status: string, paymentStatus: string): string 
     case 'PREPARING':
       return 'being prepared for dispatch'
     case 'SHIPPED':
-      return 'dispatched and on its way'
+      return 'dispatched'
     case 'COMPLETED':
       return 'completed'
     case 'CANCELLED':
