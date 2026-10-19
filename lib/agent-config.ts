@@ -28,6 +28,38 @@ export function isToolName(value: string): value is ToolName {
   return (TOOL_NAMES as readonly string[]).includes(value)
 }
 
+/** Bumped whenever buildAgentBody / buildToolConfig change in a way no setting
+ *  reflects, so an assistant set up by an older version shows as out of date and
+ *  picks the change up on the next "set up". Part of configHash. */
+export const AGENT_CONFIG_REVISION = 2
+
+/** What the assistant says if the answer is slow coming, so the line never goes
+ *  quiet. Spoken (and so cut off the moment the caller talks again). Short and
+ *  free of "one moment" style time promises, which are usually wrong. This is
+ *  only the fallback: the line itself is written fresh each time (see
+ *  THINKING_FILLER_PROMPT) so it is not the same words on every call. */
+const THINKING_FILLER: Record<string, string> = {
+  en: 'Hmm, let me see...',
+  cy: 'Hmm, gadewch i mi weld...',
+  fr: 'Hmm, voyons voir...',
+  de: 'Hmm, mal sehen...',
+  es: 'Mmm, a ver...',
+  pl: 'Hmm, zobaczmy...',
+}
+
+/** Tells the small model that writes the filler to vary it. It sees the recent
+ *  conversation, so it is told firmly to say nothing about the answer itself. */
+const THINKING_FILLER_PROMPT = `You write the few words a friendly person on a shop's phone line says to fill a short pause while they look something up. Reply with ONLY those words, 2 to 5 words, in the language the caller is speaking and in a British voice. Vary them every time, for example: "Ok, let me check", "Ok, bear with me", "Hmm, let me check that", "Right, one sec", "Let me have a look", "Ah, let me see", "Okay, just checking". Never answer the question, never promise how long it will take, never repeat a line already used in this conversation, never use a name or number.`
+
+/** Seconds of silence after the caller stops before the filler is spoken. Short
+ *  enough that the pause never feels like a dropped line, long enough that a
+ *  quick answer is not talked over. */
+const THINKING_FILLER_AFTER_SECS = 2
+
+export function thinkingFiller(language: string): string {
+  return THINKING_FILLER[language] ?? THINKING_FILLER.en!
+}
+
 export type AgentInputs = {
   businessName: string
   siteUrl: string
@@ -60,7 +92,11 @@ export function buildPrompt(input: Pick<AgentInputs, 'businessName' | 'siteUrl' 
     `HOW TO SPEAK
 - You are on a phone call. Keep every answer short: one or two sentences, then stop and let the caller reply. Never read out a list of more than three things; offer to say more instead.
 - No markdown, no bullet points, no web addresses, no product codes unless the caller asks for one. Say prices naturally ("one hundred and twelve pounds fifty") and say whether they are plus VAT or including VAT, as the tool says.
-- Before you look something up, say a very short line such as "Let me have a look for you" so the caller is not left in silence.
+- Before you look something up, say a very short line so the caller is not left in silence, and word it differently each time: "Let me have a look", "Ok, let me check", "Right, bear with me a sec", "Hang on, I'll pull that up". Never the same line twice in one call.
+- Sound like a real person, not a script. Use contractions ("I'll", "that's", "you'd"). Talk in plain, everyday words and short sentences, the way someone friendly would on a shop's phone line, and never in customer-service phrases like "I'd be happy to assist you with that", "certainly", "I apologise for any inconvenience" or "is there anything else I can help you with today".
+- React to what the caller just said before you answer: a quick "Ah, right", "Oh, lovely", "Ok, got you", "Yeah, fair enough", "Ah, sorry to hear that". Match their mood: relaxed with a chatty caller, brisk with a hurried one, gentle and unhurried with one who is annoyed or upset, and say sorry once, plainly, if something has gone wrong.
+- Vary how you open and close sentences. Do not start several replies in a row with the same word, do not echo the caller's question back to them, and do not thank them or say their name over and over. Use their first name once or twice at most, only if they have given it.
+- Ordinary spoken hesitations are fine now and then ("so...", "let's see", "right, so") but sparingly, never in every reply, and never in the middle of a price, date or postcode.
 - If you did not catch something, ask the caller to say it again. Never guess at a name, a number or an address.`,
 
     `WHAT YOU CAN DO
@@ -71,7 +107,7 @@ export function buildPrompt(input: Pick<AgentInputs, 'businessName' | 'siteUrl' 
 5. If you cannot help, take a message so somebody can get back to them (see below).`,
 
     `ORDER ENQUIRIES - RECOGNISE THE CALLER, OR CHECK WHO IS CALLING
-Step one, always: the moment the caller raises anything about an order they have placed (where it is, a delay, a problem, a change, a missing part), say a short line such as "Let me just pull that up" and call lookup_caller_orders. It needs nothing from the caller, because it works from the number they are ringing from. Do not ask for an order number, postcode, email or company name first.
+Step one, always: the moment the caller raises anything about an order they have placed (where it is, a delay, a problem, a change, a missing part), say a short line ("Let me just pull that up", or similar in your own words) and call lookup_caller_orders. It needs nothing from the caller, because it works from the number they are ringing from. Do not ask for an order number, postcode, email or company name first.
 - If it finds orders, the caller is already recognised. Skip every check below. Go straight into their order: say what the latest one is (what it contains, roughly when it was placed, where it has got to) and ask what they need to know, or answer what they asked.
 - If there is more than one, assume the caller means the newest, and say so naturally: "I can see your order from last Tuesday, is that the one you are ringing about?". If it is not, make it easy: ask which by when or what, never by number. Say "is it one from earlier, maybe the one from January?" or "was it the desk order, or something else?". Use placedWords, placedMonth and items to ask. If they happen to read out an order number, use it, but never ask for one. Once settled, talk about that order only, and do not read out the others unless asked.
 - If it finds nothing, or the caller says the order is not one it listed (a colleague placed it, or it was under another phone number), do not mention that you tried. Carry on with the check below, exactly as written.
@@ -227,6 +263,10 @@ export function buildToolConfig(name: ToolName, siteUrl: string, toolsToken: str
     name,
     description: definition.description,
     response_timeout_secs: 20,
+    // Keyboard typing under the wait, always - not only when the assistant spoke
+    // first. ElevenLabs stops it the moment the caller starts talking.
+    tool_call_sound: 'typing',
+    tool_call_sound_behavior: 'always',
     api_schema: {
       url: `${siteUrl}/api/m/ai-call-answering/tools/${name}`,
       method: 'POST',
@@ -249,7 +289,17 @@ export function buildAgentBody(input: AgentInputs): Record<string, unknown> {
       // Twilio carries 8kHz mu-law audio. Anything else is converted, which
       // costs latency and clarity on every word either way.
       asr: { user_input_audio_format: 'ulaw_8000' },
-      turn: { turn_timeout: 7, silence_end_call_timeout: 25 },
+      turn: {
+        turn_timeout: 7,
+        silence_end_call_timeout: 25,
+        // Covers the wait for the model; the typing sound covers the wait for a tool.
+        soft_timeout_config: {
+          timeout_seconds: THINKING_FILLER_AFTER_SECS,
+          message: thinkingFiller(input.language),
+          use_llm_generated_message: true,
+          llm_generated_message_prompt_override: THINKING_FILLER_PROMPT,
+        },
+      },
       tts: {
         model_id: input.ttsModel,
         voice_id: input.voiceId,
@@ -265,7 +315,7 @@ export function buildAgentBody(input: AgentInputs): Record<string, unknown> {
         prompt: {
           prompt: buildPrompt(input),
           llm: input.llm,
-          temperature: 0.3,
+          temperature: 0.4,
           tool_ids: toolIds,
           built_in_tools: {
             end_call: { type: 'system', name: 'end_call', description: '', params: { system_tool_type: 'end_call' } },
@@ -286,5 +336,5 @@ export function buildAgentBody(input: AgentInputs): Record<string, unknown> {
 export function configHash(input: AgentInputs): string {
   const comparable: Partial<AgentInputs> = { ...input }
   delete comparable.toolsToken
-  return createHash('sha256').update(JSON.stringify(comparable)).digest('hex').slice(0, 32)
+  return createHash('sha256').update(JSON.stringify({ ...comparable, revision: AGENT_CONFIG_REVISION })).digest('hex').slice(0, 32)
 }

@@ -7,6 +7,7 @@ import {
   configHash,
   defaultGreeting,
   isToolName,
+  thinkingFiller,
   type AgentInputs,
 } from './agent-config'
 
@@ -43,6 +44,14 @@ describe('buildPrompt', () => {
   })
 })
 
+describe('buildPrompt voice', () => {
+  it('asks for a human voice and varied lead-ins', () => {
+    const prompt = buildPrompt(inputs)
+    expect(prompt).toContain('Use contractions')
+    expect(prompt).toContain('word it differently each time')
+  })
+})
+
 describe('buildToolConfig', () => {
   it('points at this site with the bearer token and call identity filled by the platform', () => {
     const tool = buildToolConfig('lookup_order', inputs.siteUrl, inputs.toolsToken) as {
@@ -64,6 +73,13 @@ describe('buildToolConfig', () => {
         api_schema: { request_body_schema: { properties: Record<string, { description?: string }> } }
       }
       expect(tool.api_schema.request_body_schema.properties.call_sid?.description).toBeUndefined()
+    }
+  })
+  it('plays typing under every tool wait', () => {
+    for (const name of TOOL_NAMES) {
+      const tool = buildToolConfig(name, inputs.siteUrl, 'x') as { tool_call_sound: string; tool_call_sound_behavior: string }
+      expect(tool.tool_call_sound).toBe('typing')
+      expect(tool.tool_call_sound_behavior).toBe('always')
     }
   })
   it('describes every array item, which ElevenLabs insists on', () => {
@@ -95,6 +111,15 @@ describe('buildAgentBody', () => {
   it('attaches every tool and the post-call webhook', () => {
     expect(body.conversation_config.agent.prompt.tool_ids).toHaveLength(TOOL_NAMES.length)
     expect(body.platform_settings.workspace_overrides.webhooks.post_call_webhook_id).toBe('wh_1')
+  })
+  it('speaks a short filler when the answer is slow, in the call language', () => {
+    const turn = (body as unknown as { conversation_config: { turn: { soft_timeout_config: { timeout_seconds: number; message: string; use_llm_generated_message: boolean; llm_generated_message_prompt_override: string } } } }).conversation_config.turn
+    expect(turn.soft_timeout_config.timeout_seconds).toBeGreaterThan(0)
+    expect(turn.soft_timeout_config.message).toBe('Hmm, let me see...')
+    expect(turn.soft_timeout_config.use_llm_generated_message).toBe(true)
+    expect(turn.soft_timeout_config.llm_generated_message_prompt_override).toContain('Vary them')
+    expect(thinkingFiller('fr')).not.toBe(thinkingFiller('en'))
+    expect(thinkingFiller('xx')).toBe(thinkingFiller('en'))
   })
   it('falls back to a stock greeting', () => {
     expect(body.conversation_config.agent.first_message).toBe(defaultGreeting('Deskwell'))
