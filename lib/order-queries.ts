@@ -13,7 +13,7 @@ import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { parseConsignmentParcels } from '@/modules/shop/lib/consignment-parcels-schema'
 import { describeDeliveryMoment, describeParcels, describePlaced, summariseParcels, type ParcelFacts } from './delivery-words'
 import type { VerifiedContact } from './calls'
-import { normaliseCompany, normaliseOrderNumber, phoneMatchKey } from './text'
+import { normaliseCompany, normaliseOrderNumber, normalisePostcode, phoneMatchKey, postcodeMatchKey, splitOrderNumber } from './text'
 import {
   chargeStatusWords,
   describeRequest,
@@ -37,6 +37,8 @@ import {
 // ---------------------------------------------------------------------------
 
 const CANDIDATE_LIMIT = 25
+/** Wider than CANDIDATE_LIMIT: the postcode-neighbourhood net holds many strangers. */
+const FUZZY_CANDIDATE_LIMIT = 400
 const MAX_ORDERS_RETURNED = 3
 /** Orders read for a caller recognised by their number: enough to cover "the one
  *  from January" without turning the answer into a customer history. */
@@ -63,9 +65,15 @@ async function findCandidates(claim: OrderClaim): Promise<CandidateRow[]> {
   if (claim.orderNumber?.trim()) {
     const wanted = normaliseOrderNumber(claim.orderNumber)
     if (wanted === '') return []
+    // Also the same number without its prefix or padding zeros (DW000123 for
+    // order 123); the prefix rule is applied afterwards in order-verify.ts.
+    const bare = splitOrderNumber(claim.orderNumber)?.number ?? wanted
     return prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
       SELECT ${columns} FROM "shp_orders" o
-      WHERE ${saleOnly} AND regexp_replace(upper(o."order_number"), '[^A-Z0-9]', '', 'g') = ${wanted}
+      WHERE ${saleOnly} AND (
+        regexp_replace(upper(o."order_number"), '[^A-Z0-9]', '', 'g') = ${wanted}
+        OR ltrim(substring(o."order_number" from '([0-9]+)[^0-9]*$'), '0') = ${bare}
+      )
       LIMIT ${CANDIDATE_LIMIT}
     `)
   }
@@ -85,6 +93,26 @@ async function findCandidates(claim: OrderClaim): Promise<CandidateRow[]> {
     WHERE ${saleOnly}
       AND (o."customer_organisation" ILIKE ${like} OR o."shipping_address"->>'company' ILIKE ${like})
     ORDER BY o."created_at" DESC LIMIT ${CANDIDATE_LIMIT}
+  `)
+}
+
+/** The wider net, cast only when nothing matched exactly: orders whose delivery
+ *  postcode shares the start or the end of the one given (a single wrong
+ *  character cannot spoil both), for the verifier to judge. Email and company
+ *  claims only; an order number is already found by its digits. */
+async function findFuzzyCandidates(claim: OrderClaim): Promise<CandidateRow[]> {
+  if (claim.orderNumber?.trim()) return []
+  const key = postcodeMatchKey(claim.postcode)
+  const plain = normalisePostcode(claim.postcode)
+  if (key.length < 6 || plain.length < 6) return []
+  const held = Prisma.sql`regexp_replace(upper(o."shipping_address"->>'postcode'), '[^A-Z0-9]', '', 'g')`
+  return prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
+    SELECT o."id", o."order_number", o."customer_email", o."customer_organisation", o."shipping_address"
+    FROM "shp_orders" o
+    WHERE o."kind" = 'SALE'
+      AND (left(${held}, 2) = ${plain.slice(0, 2)} OR right(${held}, 3) = ${plain.slice(-3)}
+           OR left(${held}, 2) = ${key.slice(0, 2)} OR right(${held}, 3) = ${key.slice(-3)})
+    ORDER BY o."created_at" DESC LIMIT ${FUZZY_CANDIDATE_LIMIT}
   `)
 }
 
@@ -260,8 +288,9 @@ function sharedContact(orders: readonly OrderRow[]): VerifiedContact | null {
 }
 
 export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcome> {
-  const candidates = await findCandidates(claim)
-  const passed = candidates.filter((row) => claimMatchesOrder(claim, identityOf(row)))
+  const matching = (rows: CandidateRow[]) => rows.filter((row) => claimMatchesOrder(claim, identityOf(row)))
+  let passed = matching(await findCandidates(claim))
+  if (passed.length === 0) passed = matching(await findFuzzyCandidates(claim))
   if (passed.length === 0) return { matched: false }
   return readOrders(passed.slice(0, MAX_ORDERS_RETURNED).map((row) => row.id))
 }

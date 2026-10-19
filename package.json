@@ -1,6 +1,6 @@
 {
   "name": "cactus-module-ai-call-answering",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "AI Call Answering module for Cactus",
   "license": "MIT",
   "private": true

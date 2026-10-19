@@ -60,7 +60,29 @@ export function postcodeMatchKey(value: string): string {
  *  to them: O for 0, I for 1 and the like, in places the format forbids. */
 export function postcodesMatch(spoken: string, held: string): boolean {
   if (normalisePostcode(spoken) === normalisePostcode(held)) return true
-  return postcodeMatchKey(spoken) === postcodeMatchKey(held)
+  const spokenKey = postcodeMatchKey(spoken)
+  const heldKey = postcodeMatchKey(held)
+  if (spokenKey === heldKey) return true
+  // One character out (a mis-heard letter, a dropped digit) on a full-length
+  // postcode is still plainly that postcode.
+  return spokenKey.length >= 6 && heldKey.length >= 6 && editDistance(spokenKey, heldKey) <= 1
+}
+
+/** Levenshtein distance: how many single-character edits turn `a` into `b`. */
+export function editDistance(a: string, b: string): number {
+  if (a === b) return 0
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let row = 1; row <= a.length; row++) {
+    const current = [row]
+    for (let column = 1; column <= b.length; column++) {
+      const cost = a.charAt(row - 1) === b.charAt(column - 1) ? 0 : 1
+      current[column] = Math.min((previous[column] ?? 0) + 1, (current[column - 1] ?? 0) + 1, (previous[column - 1] ?? 0) + cost)
+    }
+    previous = current
+  }
+  return previous[b.length] ?? 0
 }
 
 /** An order number as a caller reads it out: "order DW 1042", "#dw-1042". Case
@@ -68,6 +90,52 @@ export function postcodesMatch(spoken: string, held: string): boolean {
  *  characters that matter. */
 export function normaliseOrderNumber(value: string): string {
   return value.toUpperCase().replace(/^ORDER(\s+NUMBER)?/, '').replace(/[^A-Z0-9]/g, '')
+}
+
+/** The letters and the number in an order number: "DW000123" is prefix "DW",
+ *  number "123". The number is the trailing run of digits with leading zeros
+ *  dropped; null when the order number does not end in digits. */
+export function splitOrderNumber(value: string): { prefix: string; number: string } | null {
+  const plain = normaliseOrderNumber(value)
+  const match = /^([A-Z0-9]*?)(\d+)$/.exec(plain)
+  if (!match) return null
+  const number = (match[2] ?? '').replace(/^0+/, '')
+  return number === '' ? null : { prefix: match[1] ?? '', number }
+}
+
+/** Whether a spoken order number is the held one. Exact once case and
+ *  punctuation go, or the same number with padding zeros and the shop's
+ *  prefix left off or put on: "dw000123" and "123" are order DW123. Two
+ *  different prefixes are different orders. */
+export function orderNumbersMatch(spoken: string, held: string): boolean {
+  const spokenPlain = normaliseOrderNumber(spoken)
+  if (spokenPlain === '') return false
+  if (spokenPlain === normaliseOrderNumber(held)) return true
+  const a = splitOrderNumber(spoken)
+  const b = splitOrderNumber(held)
+  if (!a || !b || a.number !== b.number) return false
+  return a.prefix === b.prefix || a.prefix === '' || b.prefix === ''
+}
+
+/** Whether two email addresses are the same one allowing a mis-heard letter or
+ *  two. Short addresses must be exact: a one-letter slip there is another
+ *  person. */
+export function emailsMatch(spoken: string, held: string): boolean {
+  const a = spoken.trim().toLowerCase()
+  const b = held.trim().toLowerCase()
+  if (a === b) return true
+  if (a === '' || b === '' || Math.min(a.length, b.length) < 10) return false
+  return editDistance(a, b) <= (Math.max(a.length, b.length) >= 20 ? 2 : 1)
+}
+
+/** Whether two company names (already normalised) are the same one allowing
+ *  for a slip of the ear or the keyboard. */
+export function companiesMatch(spoken: string, held: string): boolean {
+  if (spoken === '' || held === '') return false
+  if (spoken === held) return true
+  const longest = Math.max(spoken.length, held.length)
+  if (Math.min(spoken.length, held.length) < 5) return false
+  return 1 - editDistance(spoken, held) / longest >= 0.82
 }
 
 /** A phone number reduced to what the caller-ID form and the way orders store

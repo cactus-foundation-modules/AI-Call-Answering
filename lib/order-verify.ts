@@ -1,10 +1,11 @@
-import { normaliseCompany, normaliseOrderNumber, normalisePostcode, postcodesMatch, spokenPostcodeToText } from './text'
+import { companiesMatch, emailsMatch, normaliseCompany, normalisePostcode, orderNumbersMatch, postcodesMatch, spokenPostcodeToText } from './text'
 
 // Proving who is calling before anything about an order is said.
 //
 // The rule, in one place: the delivery postcode is ALWAYS required, together
 // with at least one of order number, email or company name, and every detail
-// the caller does give must match. A caller who knows an order number but not
+// the caller does give must match, allowing for a slip of the ear (order
+// DW000123 said as "123", a postcode, email or company one character out). A caller who knows an order number but not
 // the postcode gets nothing, because order numbers are printed on parcels and
 // emails that get forwarded and photographed; a postcode alone is a guess. It
 // takes both.
@@ -37,10 +38,10 @@ export function claimMatchesOrder(claim: OrderClaim, order: OrderIdentity): bool
   if (!postcodesMatch(claim.postcode, order.shippingPostcode)) return false
 
   if (claim.orderNumber?.trim()) {
-    if (normaliseOrderNumber(claim.orderNumber) !== normaliseOrderNumber(order.orderNumber)) return false
+    if (!orderNumbersMatch(claim.orderNumber, order.orderNumber)) return false
   }
   if (claim.email?.trim()) {
-    if (claim.email.trim().toLowerCase() !== order.customerEmail.trim().toLowerCase()) return false
+    if (!emailsMatch(claim.email, order.customerEmail)) return false
   }
   if (claim.companyName?.trim()) {
     const spoken = normaliseCompany(claim.companyName)
@@ -48,7 +49,7 @@ export function claimMatchesOrder(claim: OrderClaim, order: OrderIdentity): bool
     const held = [order.customerOrganisation, order.shippingCompany]
       .filter((name): name is string => !!name)
       .map(normaliseCompany)
-    if (!held.includes(spoken)) return false
+    if (!held.some((name) => companiesMatch(spoken, name))) return false
   }
   return true
 }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   phoneMatchKey,
+  orderNumbersMatch,
+  emailsMatch,
+  companiesMatch,
   escapeLike,
   isPlausibleEmail,
   normaliseCompany,
@@ -31,15 +34,15 @@ describe('postcodesMatch', () => {
   it('fixes letters and digits in the inward code', () => {
     expect(postcodesMatch('PO7 3D1', 'PO7 3DI')).toBe(true)
     expect(postcodesMatch('PO7 ODL', 'PO7 0DL')).toBe(true)
-    expect(postcodesMatch('PO7 5DL', 'PO7 3DL')).toBe(false)
+    expect(postcodesMatch('PO7 5DL', 'PO7 3DL')).toBe(true) // one digit out is close enough
   })
   it('understands a postcode spelled out in words', () => {
     expect(postcodesMatch('papa oh seven three delta lima', 'PO7 3DL')).toBe(true)
     expect(postcodesMatch('S double zero one 1AA', 'S001 1AA')).toBe(true)
   })
   it('still rejects a different postcode', () => {
-    expect(postcodesMatch('PO7 3DM', 'PO7 3DL')).toBe(false)
-    expect(postcodesMatch('PO8 3DL', 'PO7 3DL')).toBe(false)
+    expect(postcodesMatch('PO8 4DL', 'PO7 3DL')).toBe(false)
+    expect(postcodesMatch('SW1A 1AA', 'PO7 3DL')).toBe(false)
   })
 })
 
@@ -118,5 +121,28 @@ describe('phoneMatchKey', () => {
     expect(phoneMatchKey(null)).toBeNull()
     expect(phoneMatchKey('withheld')).toBeNull()
     expect(phoneMatchKey('123456')).toBeNull()
+  })
+})
+
+describe('fuzzy matching', () => {
+  it('matches padded and prefixed order numbers', () => {
+    expect(orderNumbersMatch('dw000123', '123')).toBe(true)
+    expect(orderNumbersMatch('123', 'DW000123')).toBe(true)
+    expect(orderNumbersMatch('order number 0123', 'DW123')).toBe(true)
+    expect(orderNumbersMatch('dw124', 'DW123')).toBe(false)
+    expect(orderNumbersMatch('xy123', 'DW123')).toBe(false)
+  })
+  it('allows one slip in a postcode', () => {
+    expect(postcodesMatch('PO7 3DM', 'PO7 3DL')).toBe(true)
+    expect(postcodesMatch('PO7 3XX', 'PO7 3DL')).toBe(false)
+    expect(postcodesMatch('PO7 3DM', 'PO7 3DL')).toBe(true)
+  })
+  it('allows a slip in a long email but not a short one', () => {
+    expect(emailsMatch('jo.bloggs@exmple.com', 'jo.bloggs@example.com')).toBe(true)
+    expect(emailsMatch('jo@ex.com', 'jim@ex.com')).toBe(false)
+  })
+  it('allows a near company name', () => {
+    expect(companiesMatch('bloggs plumbing', 'blogs plumbing')).toBe(true)
+    expect(companiesMatch('bloggs plumbing', 'smith roofing')).toBe(false)
   })
 })
