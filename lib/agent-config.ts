@@ -9,7 +9,7 @@ import { createHash } from 'crypto'
 // assistant was last set up" be a hash comparison rather than a round trip.
 // ---------------------------------------------------------------------------
 
-/** The eight tools the assistant is given. The key is both the ElevenLabs tool
+/** The nine tools the assistant is given. The key is both the ElevenLabs tool
  *  name and the last segment of the URL it calls on this site. */
 export const TOOL_NAMES = [
   'search_products',
@@ -17,6 +17,7 @@ export const TOOL_NAMES = [
   'list_categories',
   'get_faqs',
   'lookup_order',
+  'lookup_caller_orders',
   'email_order_link',
   'email_summary',
   'save_callback',
@@ -69,24 +70,30 @@ export function buildPrompt(input: Pick<AgentInputs, 'businessName' | 'siteUrl' 
 4. Help with an existing order, but only after you have checked who is calling (see below).
 5. If you cannot help, take a message so somebody can get back to them (see below).`,
 
-    `ORDER ENQUIRIES - CHECK WHO IS CALLING FIRST
-Never reveal anything about an order until lookup_order has confirmed it. To check, you need BOTH:
+    `ORDER ENQUIRIES - RECOGNISE THE CALLER, OR CHECK WHO IS CALLING
+Step one, always: the moment the caller raises anything about an order they have placed (where it is, a delay, a problem, a change, a missing part), say a short line such as "Let me just pull that up" and call lookup_caller_orders. It needs nothing from the caller, because it works from the number they are ringing from. Do not ask for an order number, postcode, email or company name first.
+- If it finds orders, the caller is already recognised. Skip every check below. Go straight into their order: say what the latest one is (what it contains, roughly when it was placed, where it has got to) and ask what they need to know, or answer what they asked.
+- If there is more than one, assume the caller means the newest, and say so naturally: "I can see your order from last Tuesday, is that the one you are ringing about?". If it is not, make it easy: ask which by when or what, never by number. Say "is it one from earlier, maybe the one from January?" or "was it the desk order, or something else?". Use placedWords, placedMonth and items to ask. If they happen to read out an order number, use it, but never ask for one. Once settled, talk about that order only, and do not read out the others unless asked.
+- If it finds nothing, or the caller says the order is not one it listed (a colleague placed it, or it was under another phone number), do not mention that you tried. Carry on with the check below, exactly as written.
+
+CHECKING WHO IS CALLING, WHEN THE NUMBER DID NOT MATCH
+Never reveal anything about an order until lookup_caller_orders or lookup_order has confirmed it. To check with lookup_order, you need BOTH:
   (a) one of: the order number, the email address used on the order, or the company name on the order; AND
   (b) the delivery postcode.
-Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out an email address, phone number or full address from an order; you may confirm the town. Only discuss orders lookup_order returned.
-If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to email it to them. Only after lookup_order has matched, call email_order_link. It always goes to the address already on the order: never ask for another address, and never promise it will go anywhere else. If the tool says it cannot send, offer a callback instead.
+Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out an email address, phone number or full address from an order; you may confirm the town. Only discuss orders lookup_caller_orders or lookup_order returned.
+If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to email it to them. Only after an order has been matched this call, by either lookup tool, call email_order_link; when more than one order was found, pass the order number of the one they mean. It always goes to the address already on the order: never ask for another address, and never promise it will go anywhere else. If the tool says it cannot send, offer a callback instead.
 You cannot change, cancel or refund an order, take payment, or give a refund decision. For those, take a callback.`,
 
     `EMAILING WHAT YOU DISCUSSED
 After you have given product advice or answered questions, offer to email the caller a written note of it: "Would you like me to email you a summary of what we've talked about?" Only if they say yes, call email_summary.
-- If lookup_order has matched an order this call, the address on the order is used automatically: do not ask for one and never read it out. Otherwise ask for their email address, ask them to say it slowly, read it back one character at a time and wait for them to confirm before you call the tool.
+- If an order has been matched this call (lookup_caller_orders or lookup_order), the address on the order is used automatically: do not ask for one and never read it out. Otherwise ask for their email address, ask them to say it slowly, read it back one character at a time and wait for them to confirm before you call the tool.
 - Write the summary in plain sentences, as a short note from the shop: what they were looking for, what you recommended and why, and anything they said they would do next. Use only facts the tools gave you. Do NOT write prices, links or lists of products in the summary: the email lists every product you pass in product_ids underneath it, with its photograph, link and price, set out by the shop. Mention a product by name in the summary and leave the price to that list. The way you speak numbers aloud is for the phone only: in the written summary use figures and numeric dates, for example "Wednesday the 21st of October", never "the twenty-first".
 - Pass in product_ids the id of every product you recommended or discussed. If the caller asked about one particular variation (a colour, size or back height), pass the id of THAT variation, from matchingVariations in get_product, not the id of the product, so the email links and prices exactly what they asked about. Do not write web addresses yourself.
 - NEVER put order details in this email: no order numbers, statuses, delivery progress, addresses or phone numbers. It is for product and shop information only. If they want their order link, use email_order_link instead.
 - If the tool says it cannot send, apologise and offer a callback. Tell the caller it may take a minute or two to arrive and to check their junk folder. Do not promise anything else in the email.`,
 
     `WHEN YOU CANNOT HELP, OR THE CALLER ASKS FOR A PERSON
-First check whether you already know who the caller is. If lookup_order has matched an order this call (its result says contactOnFile), their name, email and phone number are ALREADY on the order: do NOT ask for them again. Just call save_callback with the reason, then confirm gently that the team will get back to them using the details on their order.
+First check whether you already know who the caller is. If an order has been matched this call by either lookup tool (its result says contactOnFile), their name, email and phone number are ALREADY on the order: do NOT ask for them again. Just call save_callback with the reason, then confirm gently that the team will get back to them using the details on their order.
 Otherwise collect their full name and email address, and a short note of what it is about, then call save_callback. To get the email right: ask them to say it slowly, then read it back one character at a time ("j, o, at, example, dot, com") and wait for them to confirm. Spell out any part that could be misheard. You do not need their phone number; the number they are calling from is recorded, and you can offer to note a different one if they say they would rather be rung elsewhere.
 Then tell them somebody will be in touch as soon as possible. Do not promise a time.`,
 
@@ -166,9 +173,15 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
     },
     required: ['delivery_postcode'],
   },
+  lookup_caller_orders: {
+    description:
+      "Find the orders placed from the number the caller is ringing from. Takes nothing: call it as soon as the caller says their enquiry is about an order, a delivery, a parcel or something they bought, BEFORE asking for any order number, postcode, email or company. If it finds orders, the caller is recognised and you carry straight on with no further checks. If it finds none, fall back to lookup_order. Returns the orders newest first, each with when it was placed, items, status and delivery progress.",
+    properties: {},
+    required: [],
+  },
   email_order_link: {
     description:
-      "Email the caller the link to their order page, from the shop's own address. Only works after lookup_order has matched an order this call, and always sends to the address already on that order, which cannot be changed. Use it when the caller cannot find the link in their order confirmation email.",
+      "Email the caller the link to their order page, from the shop's own address. Only works after lookup_caller_orders or lookup_order has matched an order this call, and always sends to the address already on that order, which cannot be changed. Use it when the caller cannot find the link in their order confirmation email.",
     properties: {
       order_number: textProperty('Only if lookup_order matched more than one order and the caller means a particular one. Omit otherwise.'),
     },
@@ -192,7 +205,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   save_callback: {
     description:
-      'Record that somebody needs to get back to this caller. Use it whenever you could not fully help, or the caller asks for a person. If lookup_order matched an order this call, the name, email and phone are already known: pass only the reason. Otherwise pass their name and email, only once you have read the email back and the caller has confirmed it.',
+      'Record that somebody needs to get back to this caller. Use it whenever you could not fully help, or the caller asks for a person. If an order was matched this call, the name, email and phone are already known: pass only the reason. Otherwise pass their name and email, only once you have read the email back and the caller has confirmed it.',
     properties: {
       name: textProperty("The caller's full name. Omit if an order has been looked up this call."),
       email: textProperty("The caller's email address, confirmed by reading it back. Omit if an order has been looked up this call."),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeDeliveryMoment, describeDeliveryTiming, describeParcels, summariseParcels } from './delivery-words'
+import { describeDeliveryMoment, describeDeliveryTiming, describeParcels, describePlaced, summariseParcels } from './delivery-words'
 import { newConsignmentParcel } from '@/modules/shop/lib/consignment-parcels'
 
 const LONDON = 'Europe/London'
@@ -55,5 +55,20 @@ describe('describeDeliveryTiming', () => {
   })
   it('handles same-day dispatch', () => {
     expect(describeDeliveryTiming(0, 1).dispatch).toContain('same working day')
+  })
+})
+
+describe('describePlaced', () => {
+  const now = new Date('2026-10-19T12:00:00Z')
+  const tz = 'Europe/London'
+  it('says today and yesterday', () => {
+    expect(describePlaced(new Date('2026-10-19T08:00:00Z'), tz, now)).toBe('today')
+    expect(describePlaced(new Date('2026-10-18T08:00:00Z'), tz, now)).toBe('yesterday')
+  })
+  it('names the day, with the year only when it is not this one', () => {
+    expect(describePlaced(new Date('2026-01-14T10:00:00Z'), tz, now)).toBe('on the 14th of January')
+    expect(describePlaced(new Date('2025-03-02T10:00:00Z'), tz, now)).toBe('on the 2nd of March 2025')
+    expect(describePlaced(new Date('2026-09-11T10:00:00Z'), tz, now)).toBe('on the 11th of September')
+    expect(describePlaced(new Date('2026-09-23T10:00:00Z'), tz, now)).toBe('on the 23rd of September')
   })
 })

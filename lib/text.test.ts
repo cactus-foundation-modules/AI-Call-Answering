@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  phoneMatchKey,
   escapeLike,
   isPlausibleEmail,
   normaliseCompany,
@@ -99,5 +100,23 @@ describe('searchTokens', () => {
 describe('escapeLike', () => {
   it('makes wildcards literal', () => {
     expect(escapeLike('50%_off\\')).toBe('50\\%\\_off\\\\')
+  })
+})
+
+describe('phoneMatchKey', () => {
+  it('agrees across caller-ID and order formats', () => {
+    const key = phoneMatchKey('+447703822803')
+    expect(key).toBe('7703822803')
+    expect(phoneMatchKey('07703822803')).toBe(key)
+    expect(phoneMatchKey('07703 822 803')).toBe(key)
+    expect(phoneMatchKey('+44 (0)7703 822803')).toBe(key)
+    expect(phoneMatchKey('01670353124')).toBe('1670353124')
+    expect(phoneMatchKey('+441670353124')).toBe('1670353124')
+  })
+  it('refuses withheld and too-short numbers', () => {
+    expect(phoneMatchKey('')).toBeNull()
+    expect(phoneMatchKey(null)).toBeNull()
+    expect(phoneMatchKey('withheld')).toBeNull()
+    expect(phoneMatchKey('123456')).toBeNull()
   })
 })

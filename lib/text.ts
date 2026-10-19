@@ -70,6 +70,16 @@ export function normaliseOrderNumber(value: string): string {
   return value.toUpperCase().replace(/^ORDER(\s+NUMBER)?/, '').replace(/[^A-Z0-9]/g, '')
 }
 
+/** A phone number reduced to what the caller-ID form and the way orders store
+ *  it share: its last ten digits. Caller ID arrives as "+447703822803" and an
+ *  order holds "07703822803" or "07703 822 803", with or without the country
+ *  code; the ten digits after the leading 0 are the same in all of them. Null
+ *  when there are fewer than ten digits (withheld, or too short to trust). */
+export function phoneMatchKey(value: string | null | undefined): string | null {
+  const digits = (value ?? '').replace(/\D/g, '')
+  return digits.length >= 10 ? digits.slice(-10) : null
+}
+
 /** A company name with the noise that varies between how it is said and how it
  *  was typed at checkout: case, punctuation, a trailing Ltd or Limited. */
 export function normaliseCompany(value: string): string {

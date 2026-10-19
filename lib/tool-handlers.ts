@@ -11,7 +11,7 @@ import {
   callerLabel,
   type CallRecord,
 } from './calls'
-import { lookupOrders } from './order-queries'
+import { lookupOrders, lookupOrdersByCallerNumber } from './order-queries'
 import { emailOrderLink } from './order-link'
 import { emailCallSummary, MAX_PRODUCTS_PER_EMAIL } from './call-email'
 import { isCheckableClaim } from './order-verify'
@@ -136,6 +136,44 @@ async function runOrderLookup(input: z.infer<typeof OrderInput>): Promise<ToolRe
   }
 }
 
+/** Orders for the number the caller rang from, with nothing asked of them. A
+ *  miss is not a failed check (nobody guessed anything), so it never counts
+ *  towards the lock. The caller is told only what a verified lookup would say. */
+async function runCallerOrderLookup(input: z.infer<typeof NoInput>): Promise<ToolResult> {
+  const call = await resolveCall(input)
+  if (!call) return { ok: false, message: 'Order checks only work on a live phone call. Offer a callback instead.' }
+
+  const outcome = await lookupOrdersByCallerNumber(call.fromNumber)
+  if (!outcome.matched) {
+    return {
+      ok: true,
+      matched: false,
+      message: 'No order is linked to the number this caller rang from. Say nothing about that to the caller. Carry on with the normal check using lookup_order: ask for the delivery postcode and the order number, email or company name.',
+    }
+  }
+  for (const orderNumber of outcome.internalNumbers) await recordVerifiedOrder(call.id, orderNumber)
+  await recordVerifiedContact(call.id, outcome.contact)
+  const contactOnFile = !!outcome.contact && outcome.contact.email !== ''
+  const several = outcome.orders.length > 1
+  return {
+    ok: true,
+    matched: true,
+    recognisedByPhoneNumber: true,
+    orders: outcome.orders,
+    contactOnFile,
+    note: [
+      'This caller is recognised by the number they rang from, so do NOT ask for a postcode, order number, email or company name.',
+      several
+        ? 'Orders are newest first. Assume they mean the first one: tell them what you can see and ask whether that is the one they mean. If it is not, ask which order by when it was placed or what was in it (for example "is it the one from January?" or "the desk order?"), using placedMonth, placedWords and items. Never ask for an order number; take one if they volunteer it. Once they say which, talk only about that order.'
+        : 'They have one order. Go straight to it.',
+      'If they say it is about an order that is not in this list (for example one placed by a colleague, or under another number), use lookup_order and the normal check instead.',
+      contactOnFile
+        ? 'Their name, email and phone are already on the order: for a callback call save_callback with just the reason.'
+        : 'The order has no usable contact details, so a callback will need the caller\'s name and email.',
+    ].join(' '),
+  }
+}
+
 async function runEmailOrderLink(input: z.infer<typeof OrderLinkInput>): Promise<ToolResult> {
   const call = await resolveCall(input)
   if (!call) return { ok: false, message: 'Emailing a link only works on a live phone call. Offer a callback instead.' }
@@ -248,6 +286,11 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const input = OrderInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       return { result: await runOrderLookup(input.data), callbackSaved: null }
+    }
+    case 'lookup_caller_orders': {
+      const input = NoInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      return { result: await runCallerOrderLookup(input.data), callbackSaved: null }
     }
     case 'email_order_link': {
       const input = OrderLinkInput.safeParse(body)

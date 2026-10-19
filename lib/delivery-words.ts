@@ -129,3 +129,20 @@ export function describeDeliveryTiming(handlingDays: number, transitDays: number
     totalWorkingDays: handlingDays + transitDays,
   }
 }
+
+const DAY_MS = 86_400_000
+
+/** "today", "yesterday", or "on the 14th of January" (the year only when it is
+ *  not this one), by the shop's own calendar rather than the server's. */
+export function describePlaced(placed: Date, timezone: string, now: Date = new Date()): string {
+  const key = (date: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(date)
+  if (key(placed) === key(now)) return 'today'
+  if (key(placed) === key(new Date(now.getTime() - DAY_MS))) return 'yesterday'
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, day: 'numeric', month: 'long', year: 'numeric' }).formatToParts(placed)
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  const dayNumber = Number(part('day'))
+  const tens = dayNumber % 100
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[dayNumber % 10] ?? 'th'
+  const sameYear = part('year') === new Intl.DateTimeFormat('en-GB', { timeZone: timezone, year: 'numeric' }).format(now)
+  return `on the ${dayNumber}${suffix} of ${part('month')}${sameYear ? '' : ` ${part('year')}`}`
+}

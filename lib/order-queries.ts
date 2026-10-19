@@ -11,9 +11,9 @@ import {
 } from './order-verify'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { parseConsignmentParcels } from '@/modules/shop/lib/consignment-parcels-schema'
-import { describeDeliveryMoment, describeParcels, summariseParcels, type ParcelFacts } from './delivery-words'
+import { describeDeliveryMoment, describeParcels, describePlaced, summariseParcels, type ParcelFacts } from './delivery-words'
 import type { VerifiedContact } from './calls'
-import { normaliseCompany, normaliseOrderNumber } from './text'
+import { normaliseCompany, normaliseOrderNumber, phoneMatchKey } from './text'
 
 // ---------------------------------------------------------------------------
 // Looking an order up for a caller who has said who they are.
@@ -28,6 +28,9 @@ import { normaliseCompany, normaliseOrderNumber } from './text'
 
 const CANDIDATE_LIMIT = 25
 const MAX_ORDERS_RETURNED = 3
+/** Orders read for a caller recognised by their number: enough to cover "the one
+ *  from January" without turning the answer into a customer history. */
+const MAX_CALLER_ORDERS = 5
 
 type CandidateRow = {
   id: string
@@ -88,6 +91,11 @@ function identityOf(row: CandidateRow): OrderIdentity {
 export type VerifiedOrder = {
   orderNumber: string
   placed: string
+  /** When it was placed in words a caller recognises, for telling orders apart
+   *  without an order number: "today", "yesterday", "on the 14th of January". */
+  placedWords: string
+  /** Month and year, for "is it the one from January". */
+  placedMonth: string
   status: string
   payment: string
   total: string
@@ -168,8 +176,32 @@ export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcom
   const candidates = await findCandidates(claim)
   const passed = candidates.filter((row) => claimMatchesOrder(claim, identityOf(row)))
   if (passed.length === 0) return { matched: false }
+  return readOrders(passed.slice(0, MAX_ORDERS_RETURNED).map((row) => row.id))
+}
 
-  const ids = passed.slice(0, MAX_ORDERS_RETURNED).map((row) => row.id)
+/** The orders placed from the number the caller rang from, newest first. This
+ *  is the only way in that asks the caller for nothing, so it is deliberately
+ *  narrow: the number must be a real one (not withheld), and a match is on the
+ *  order's own contact number. Caller ID can be faked, so what comes back is the
+ *  same trimmed view as any verified lookup: progress and town, never the
+ *  customer record. */
+export async function lookupOrdersByCallerNumber(fromNumber: string): Promise<OrderLookupOutcome> {
+  const key = phoneMatchKey(fromNumber)
+  if (!key) return { matched: false }
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT o."id" FROM "shp_orders" o
+    WHERE o."kind" = 'SALE'
+      AND (
+        right(regexp_replace(coalesce(o."customer_phone", ''), '[^0-9]', '', 'g'), 10) = ${key}
+        OR right(regexp_replace(coalesce(o."notify_phone", ''), '[^0-9]', '', 'g'), 10) = ${key}
+      )
+    ORDER BY o."created_at" DESC LIMIT ${MAX_CALLER_ORDERS}
+  `)
+  if (rows.length === 0) return { matched: false }
+  return readOrders(rows.map((row) => row.id))
+}
+
+async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
   const [orders, items, shipments, config, timezone] = await Promise.all([
     prisma.$queryRaw<OrderRow[]>(Prisma.sql`
       SELECT o."id", o."order_number", o."status", o."payment_status", o."created_at", o."total", o."currency", o."shipping_address",
@@ -192,6 +224,8 @@ export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcom
   const verified: VerifiedOrder[] = orders.map((order) => ({
     orderNumber: order.order_number,
     placed: day(order.created_at),
+    placedWords: describePlaced(order.created_at, timezone),
+    placedMonth: new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: timezone }).format(order.created_at),
     status: orderStatusWords(order.status, order.payment_status),
     payment: order.payment_status.toLowerCase().replace(/_/g, ' '),
     total: formatPrice(Number(order.total), order.currency === 'GBP' ? config.currencySymbol : `${order.currency} `),
