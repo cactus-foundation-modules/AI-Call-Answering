@@ -121,8 +121,11 @@ async function thread(id: string): Promise<ConversationThread | null> {
         ? [{
             id: `${call.id}:transcript`,
             direction: 'in' as const,
-            authorName: `Transcript (${formatDuration(call.durationSeconds)})`,
-            text: buildTranscriptText(call),
+            // The caller's own number, as the other messages in a conversation
+            // name who they are from. The inbox writes it the way it writes
+            // every number; the length of the call goes with the text.
+            authorName: call.callerName || phoneOf(call) || 'Caller',
+            text: `Transcript (${formatDuration(call.durationSeconds)})\n\n${buildTranscriptText(call)}`,
             html: null,
             sentAt: lastActivity(call),
             attachments: [],

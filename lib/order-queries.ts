@@ -266,6 +266,12 @@ function day(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
+/** Whether any shipment of this order has a real delivery date (or has been
+ *  delivered), which makes the estimate printed on its lines redundant. */
+function hasCourierDate(orderId: string, shipments: readonly ShipmentRow[]): boolean {
+  return shipments.some((shipment) => shipment.order_id === orderId && (!!shipment.delivery_date || !!shipment.delivered_at))
+}
+
 function expected(row: ShipmentRow): string | null {
   if (!row.delivery_date) return null
   return row.delivery_slot_start && row.delivery_slot_end
@@ -427,7 +433,7 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
         sku: item.product_sku?.trim() || null,
         unitPrice: money(item.unit_price, order, symbol),
         lineTotal: money(item.total, order, symbol),
-        choices: lineChoices(item.line_meta),
+        choices: lineChoices(item.line_meta, { dropDeliveryEstimate: hasCourierDate(order.id, shipments) }),
         refundedQuantity: item.refunded_qty,
         preOrderDispatch: item.is_pre_order && item.pre_order_dispatch_date ? day(item.pre_order_dispatch_date) : null,
         returnable: item.returnable,

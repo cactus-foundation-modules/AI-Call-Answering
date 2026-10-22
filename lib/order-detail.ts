@@ -13,8 +13,9 @@ const LineFields = z.object({
 })
 
 /** What the customer chose on an order line ("Colour: Beech", "Delivery:
- *  Flat-Pack - by Tuesday 27th of October"), as the order page shows them. */
-export function lineChoices(lineMeta: unknown): string[] {
+ *  Flat-Pack - by Tuesday 27th of October"), as the order page shows them.
+ *  `dropDeliveryEstimate` leaves out the checkout's delivery line. */
+export function lineChoices(lineMeta: unknown, opts: { dropDeliveryEstimate?: boolean } = {}): string[] {
   const parsed = LineFields.safeParse(lineMeta)
   if (!parsed.success) return []
   const out: string[] = []
@@ -22,6 +23,10 @@ export function lineChoices(lineMeta: unknown): string[] {
     const label = field.label?.trim() ?? ''
     const value = field.value?.trim() ?? ''
     if (!value) continue
+    // "Delivery: Flat-Pack - by Tuesday 27th" is the estimate made at checkout.
+    // Once the courier has given a real date it only gives the caller a second,
+    // different date to be confused by.
+    if (opts.dropDeliveryEstimate && /^deliver/i.test(label)) continue
     out.push(label ? `${label}: ${value}` : value)
   }
   return out

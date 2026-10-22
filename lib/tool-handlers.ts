@@ -16,7 +16,7 @@ import { emailOrderLink } from './order-link'
 import { emailCallSummary, MAX_PRODUCTS_PER_EMAIL } from './call-email'
 import { isCheckableClaim } from './order-verify'
 import { lookupFaqs } from './faq-queries'
-import { getProductDetail, listTopCategories, searchProducts } from './product-queries'
+import { findBySku, getProductDetail, listTopCategories, searchProducts } from './product-queries'
 import { isPlausibleEmail } from './text'
 import type { ToolName } from './agent-config'
 
@@ -46,6 +46,10 @@ const SearchInput = CallIdentity.extend({
 const ProductInput = CallIdentity.extend({
   product_id: z.string().trim().min(1).max(100),
   options: z.string().trim().max(200).optional(),
+  quantity: z.number().int().positive().max(100_000).optional(),
+})
+const SkuInput = CallIdentity.extend({
+  sku: z.string().trim().min(1).max(80),
 })
 const NoInput = CallIdentity
 const FaqInput = CallIdentity.extend({
@@ -270,10 +274,16 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const { products, note } = await searchProducts(input.data.query, input.data.max_price ?? null)
       return { result: { ok: true, products, note }, callbackSaved: null }
     }
+    case 'find_by_sku': {
+      const input = SkuInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const { hits, note } = await findBySku(input.data.sku)
+      return { result: { ok: true, products: hits, note }, callbackSaved: null }
+    }
     case 'get_product': {
       const input = ProductInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
-      const detail = await getProductDetail(input.data.product_id, blankToNull(input.data.options))
+      const detail = await getProductDetail(input.data.product_id, blankToNull(input.data.options), input.data.quantity ?? null)
       return {
         result: detail
           ? { ok: true, product: detail }

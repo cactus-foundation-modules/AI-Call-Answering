@@ -6,7 +6,9 @@ import {
   effectivePrice,
   formatPrice,
   priceBasis,
+  quoteQuantity,
   stockSummary,
+  type QuantityQuote,
 } from './product-format'
 import { resolveProductDeliveryOptions } from '@/modules/shop/lib/detail-delivery'
 import { getProductFaqCategoryChain } from '@/modules/shop/lib/db/catalogue'
@@ -15,6 +17,7 @@ import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { describeForecast, loadDeliveryForecast, type SpokenDeliveryService } from './delivery-forecast'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
+import { normaliseSpokenSku, skuMatch, skuSearchDigits, type SkuMatch } from './sku'
 import type { ProductRef } from '@/modules/unified-inbox/lib/products'
 
 // ---------------------------------------------------------------------------
@@ -198,6 +201,7 @@ async function loadProductFaqs(productId: string, own: unknown): Promise<Array<{
 }
 
 type DetailRow = ProductRow & {
+  sku: string | null
   description: string | null
   type: string
   weight: unknown
@@ -220,6 +224,11 @@ export type ProductDetail = ProductSummary & {
   options: Array<{ name: string; values: string[] }>
   priceRange: string | null
   variationCount: number
+  /** The product's own code, for a caller who asks for it. Never volunteered. */
+  sku: string | null
+  /** The cost and stock for the quantity asked about, when the item is settled
+   *  (no variations, or one variation matched). Null otherwise. */
+  quantityQuote: QuantityQuote | null
   /** The variations that fit the options asked for, each with its own id and
    *  exact price. Only present when get_product was given options. */
   matchingVariations: VariationMatch[] | null
@@ -273,9 +282,14 @@ export type VariationMatch = {
   price: string
   wasPrice: string | null
   availability: string
+  /** The code, for a caller who asks for it. Never volunteered. */
+  sku: string | null
+  /** Present when get_product was given a quantity. */
+  quantityQuote: QuantityQuote | null
 }
 
 type VariationRow = {
+  sku: string | null
   id: string
   name: string
   price: unknown
@@ -297,11 +311,12 @@ async function findVariations(
   productId: string,
   wanted: string,
   symbol: string,
+  quantity: number | null,
 ): Promise<{ matches: VariationMatch[]; total: number } | null> {
   const tokens = searchTokens(wanted, 10)
   if (tokens.length === 0 || !(await tableExists('svr_variants'))) return null
   const rows = await prisma.$queryRaw<VariationRow[]>`
-    SELECT child."id", child."name", child."price", child."sale_price", child."track_inventory",
+    SELECT child."id", child."name", child."sku", child."price", child."sale_price", child."track_inventory",
            child."stock_count", child."low_stock_threshold", child."out_of_stock_behaviour", child."is_pre_order",
            (SELECT string_agg(ov."label", ' / ' ORDER BY o."position", ov."position")
               FROM "svr_variant_values" vv
@@ -319,18 +334,21 @@ async function findVariations(
   })
   const matches = fits.slice(0, MAX_MATCHING_VARIATIONS).map((row): VariationMatch => {
     const { now, was } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
+    const facts = {
+      trackInventory: row.track_inventory,
+      stockCount: row.stock_count,
+      lowStockThreshold: row.low_stock_threshold,
+      outOfStockBehaviour: row.out_of_stock_behaviour,
+      isPreOrder: row.is_pre_order,
+    }
     return {
       id: row.id,
       options: row.options ?? row.name,
       price: formatPrice(now, symbol),
       wasPrice: was === null ? null : formatPrice(was, symbol),
-      availability: stockSummary({
-        trackInventory: row.track_inventory,
-        stockCount: row.stock_count,
-        lowStockThreshold: row.low_stock_threshold,
-        outOfStockBehaviour: row.out_of_stock_behaviour,
-        isPreOrder: row.is_pre_order,
-      }),
+      availability: stockSummary(facts),
+      sku: row.sku?.trim() || null,
+      quantityQuote: quantity === null ? null : quoteQuantity(quantity, now, symbol, facts),
     }
   })
   return { matches, total: fits.length }
@@ -364,9 +382,13 @@ function describeDimensions(row: DetailRow): string | null {
   return `${parts.filter((part): part is string => part !== null).join(', ')} ${unit}`.trim()
 }
 
-export async function getProductDetail(productId: string, wantedOptions: string | null = null): Promise<ProductDetail | null> {
+export async function getProductDetail(
+  productId: string,
+  wantedOptions: string | null = null,
+  quantity: number | null = null,
+): Promise<ProductDetail | null> {
   const rows = await prisma.$queryRaw<DetailRow[]>`
-    SELECT p."id", p."name", p."price", p."sale_price", p."short_description", p."description", p."type",
+    SELECT p."id", p."name", p."sku", p."price", p."sale_price", p."short_description", p."description", p."type",
            p."track_inventory", p."stock_count", p."low_stock_threshold", p."out_of_stock_behaviour",
            p."is_pre_order", p."pre_order_dispatch_date", p."min_order_quantity", p."faqs",
            p."weight", p."weight_unit", p."dimension_l", p."dimension_w", p."dimension_h", p."dimension_unit",
@@ -387,7 +409,7 @@ export async function getProductDetail(productId: string, wantedOptions: string 
     loadDeliveryServices(productId, config.currencySymbol),
     loadDeliveryForecast(productId),
     loadProductFaqs(productId, row.faqs),
-    wantedOptions ? findVariations(productId, wantedOptions, config.currencySymbol) : Promise.resolve(null),
+    wantedOptions ? findVariations(productId, wantedOptions, config.currencySymbol, quantity) : Promise.resolve(null),
   ])
   const spread = spreads.get(productId) ?? null
   const weight = numberOrNull(row.weight)
@@ -403,6 +425,16 @@ export async function getProductDetail(productId: string, wantedOptions: string 
     options,
     priceRange: spread && options.length > 0 ? describePriceRange(spread, config.currencySymbol) : null,
     variationCount: spread?.count ?? 0,
+    sku: row.sku?.trim() || null,
+    quantityQuote: quantity !== null && !spread
+      ? quoteQuantity(quantity, effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price)).now, config.currencySymbol, {
+          trackInventory: row.track_inventory,
+          stockCount: row.stock_count,
+          lowStockThreshold: row.low_stock_threshold,
+          outOfStockBehaviour: row.out_of_stock_behaviour,
+          isPreOrder: row.is_pre_order,
+        })
+      : null,
     matchingVariations: found ? found.matches : null,
     specifications,
     questionsAnswered,
@@ -413,7 +445,7 @@ export async function getProductDetail(productId: string, wantedOptions: string 
       : deliveryServices.length > 0
         ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
         : 'No delivery timing is published for this product. Do not guess one; offer a callback.',
-    priceNote: priceNote(spread, found, wantedOptions, priceBasis(config.taxMode)),
+    priceNote: priceNote(spread, found, wantedOptions, priceBasis(config.taxMode), quantity, row.min_order_quantity),
   }
 }
 
@@ -421,6 +453,20 @@ export async function getProductDetail(productId: string, wantedOptions: string 
  *  variations has no single price: until the caller's options pin one down, only
  *  the range may be spoken, and it must be called a range. */
 function priceNote(
+  spread: VariationSpread | null,
+  found: { matches: VariationMatch[]; total: number } | null,
+  wantedOptions: string | null,
+  basis: string,
+  quantity: number | null = null,
+  minimumOrder: number | null = null,
+): string {
+  const quantityNote = quantity === null
+    ? ''
+    : ` For ${quantity}, read the total and the stock from quantityQuote (on the product, or on each matching variation): never work the sum out yourself. Delivery prices and dates are for ONE item. How a delivery charge changes with quantity is not known here, so do not say whether it is per item or per order and do not multiply it: say the checkout shows the delivery total for the whole order, or offer a callback. A large quantity may not be covered by the dates given.${minimumOrder !== null && minimumOrder > quantity ? ` The minimum order is ${minimumOrder}, which is more than ${quantity}.` : ''}`
+  return `${priceNoteCore(spread, found, wantedOptions, basis)}${quantityNote}`
+}
+
+function priceNoteCore(
   spread: VariationSpread | null,
   found: { matches: VariationMatch[]; total: number } | null,
   wantedOptions: string | null,
@@ -469,4 +515,117 @@ export async function listTopCategories(): Promise<Array<{ name: string; descrip
     LIMIT 40
   `
   return rows.map((row) => ({ name: row.name, description: truncate(plainText(row.short_description), 140) }))
+}
+
+type SkuRow = {
+  id: string
+  name: string
+  sku: string | null
+  price: unknown
+  sale_price: unknown
+  track_inventory: boolean
+  stock_count: number | null
+  low_stock_threshold: number | null
+  out_of_stock_behaviour: string | null
+  is_pre_order: boolean
+  parent_id: string | null
+  parent_name: string | null
+  options: string | null
+}
+
+export type SkuHit = {
+  /** Pass this to get_product. */
+  productId: string
+  name: string
+  match: 'exact' | 'close'
+  /** Set when the code belongs to one variation of a listing. */
+  variation: { id: string; options: string; price: string; wasPrice: string | null; availability: string } | null
+  /** For a code that is a whole product rather than a variation. */
+  price: string | null
+  availability: string | null
+}
+
+const MAX_SKU_HITS = 3
+
+/** Products and variations whose code is the one the caller read out, allowing
+ *  for a mis-heard letter. The code itself is never returned: the caller has it,
+ *  and the assistant must not recite codes to people who did not ask. */
+export async function findBySku(spoken: string): Promise<{ hits: SkuHit[]; note: string }> {
+  const wanted = normaliseSpokenSku(spoken)
+  if (wanted.length < 3) {
+    return { hits: [], note: 'That is too short to be a product code. Ask the caller to read it again, letter by letter and digit by digit.' }
+  }
+  const digits = skuSearchDigits(wanted)
+  const pattern = `%${digits ?? wanted}%`
+  const config = await getShopConfigCached()
+
+  const plain = await prisma.$queryRaw<SkuRow[]>(Prisma.sql`
+    SELECT p."id", p."name", p."sku", p."price", p."sale_price", p."track_inventory", p."stock_count",
+           p."low_stock_threshold", p."out_of_stock_behaviour", p."is_pre_order",
+           NULL::text AS parent_id, NULL::text AS parent_name, NULL::text AS options
+    FROM "shp_products" p
+    WHERE ${VISIBLE} AND p."sku" IS NOT NULL
+      AND regexp_replace(upper(p."sku"), '[^A-Z0-9]', '', 'g') LIKE ${pattern}
+    LIMIT 60
+  `)
+  const variations = (await tableExists('svr_variants'))
+    ? await prisma.$queryRaw<SkuRow[]>(Prisma.sql`
+        SELECT child."id", child."name", child."sku", child."price", child."sale_price", child."track_inventory",
+               child."stock_count", child."low_stock_threshold", child."out_of_stock_behaviour", child."is_pre_order",
+               sv."product_id" AS parent_id, parent."name" AS parent_name,
+               (SELECT string_agg(ov."label", ' / ' ORDER BY o."position", ov."position")
+                  FROM "svr_variant_values" vv
+                  JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+                  JOIN "svr_options" o ON o."id" = ov."option_id"
+                 WHERE vv."variant_id" = sv."id") AS options
+        FROM "svr_variants" sv
+        JOIN "shp_products" child ON child."id" = sv."child_product_id"
+        JOIN "shp_products" parent ON parent."id" = sv."product_id"
+        WHERE sv."enabled" = true AND child."status" = 'ACTIVE'
+          AND parent."status" = 'ACTIVE' AND parent."catalogue_hidden" = false AND parent."parts_only" = false
+          AND child."sku" IS NOT NULL
+          AND regexp_replace(upper(child."sku"), '[^A-Z0-9]', '', 'g') LIKE ${pattern}
+        LIMIT 60
+      `)
+    : []
+
+  const ranked: Array<{ row: SkuRow; match: Exclude<SkuMatch, null> }> = []
+  for (const row of [...plain, ...variations]) {
+    const match = row.sku ? skuMatch(spoken, row.sku) : null
+    if (match) ranked.push({ row, match })
+  }
+  ranked.sort((a, b) => (a.match === b.match ? 0 : a.match === 'exact' ? -1 : 1))
+
+  const hits = ranked.slice(0, MAX_SKU_HITS).map(({ row, match }): SkuHit => {
+    const { now, was } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
+    const availability = stockSummary({
+      trackInventory: row.track_inventory,
+      stockCount: row.stock_count,
+      lowStockThreshold: row.low_stock_threshold,
+      outOfStockBehaviour: row.out_of_stock_behaviour,
+      isPreOrder: row.is_pre_order,
+    })
+    const price = formatPrice(now, config.currencySymbol)
+    const wasPrice = was === null ? null : formatPrice(was, config.currencySymbol)
+    if (row.parent_id) {
+      return {
+        productId: row.parent_id,
+        name: row.parent_name ?? row.name,
+        match,
+        variation: { id: row.id, options: row.options ?? row.name, price, wasPrice, availability },
+        price: null,
+        availability: null,
+      }
+    }
+    return { productId: row.id, name: row.name, match, variation: null, price, availability }
+  })
+
+  if (hits.length === 0) {
+    return { hits, note: 'No product has that code. Ask the caller to read it once more, or to describe the item (type, colour, name on the product page). Never tell them codes cannot be searched.' }
+  }
+  const close = hits.some((hit) => hit.match === 'close')
+  return {
+    hits,
+    note: `Prices are ${priceBasis(config.taxMode)}. ${close ? 'The code matched only closely (a letter may have been misheard), so confirm by saying what the item is by name and options, and let the caller agree before going on. ' : ''}Say the product name and its options, not the code, and do not read a code out unless the caller asks. A variation hit already tells you the exact option and price: do not ask which option they want. Use its variation id for email_summary and the productId for get_product.`,
+  }
 }

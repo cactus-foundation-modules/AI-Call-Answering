@@ -48,3 +48,26 @@ export function describePriceRange(range: PriceRange, symbol: string): string {
     ? formatPrice(range.low, symbol)
     : `from ${formatPrice(range.low, symbol)} to ${formatPrice(range.high, symbol)}`
 }
+
+export type QuantityQuote = {
+  quantity: number
+  unitPrice: string
+  /** Worked out here, to the penny, so the assistant never does the sum. */
+  total: string
+  stock: string
+}
+
+/** What `quantity` of one item costs and whether the shop has that many. */
+export function quoteQuantity(quantity: number, unit: number, symbol: string, facts: StockFacts): QuantityQuote {
+  const total = Math.round(unit * quantity * 100) / 100
+  let stock: string
+  if (facts.isPreOrder || !facts.trackInventory) {
+    stock = stockSummary(facts)
+  } else {
+    const count = facts.stockCount ?? 0
+    if (count >= quantity) stock = `enough in stock for ${quantity}`
+    else if (count > 0) stock = `only ${count} in stock, fewer than the ${quantity} asked for`
+    else stock = stockSummary(facts)
+  }
+  return { quantity, unitPrice: formatPrice(unit, symbol), total: formatPrice(total, symbol), stock }
+}

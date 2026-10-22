@@ -37,7 +37,7 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 | --- | --- |
 | `twilio.inbound-call-handler` | The hook the Twilio module offers every call to. The assistant takes the call by asking ElevenLabs to register it and returning the connection instructions. |
 | `core.conversation-provider` | Publishes each call to the unified inbox as a phone conversation. |
-| `tools/<name>` | The nine tools the assistant calls mid-call: `search_products`, `get_product`, `list_categories`, `get_faqs`, `lookup_order`, `lookup_caller_orders`, `email_order_link`, `email_summary`, `save_callback`. Authenticated with a random bearer token made at setup. |
+| `tools/<name>` | The ten tools the assistant calls mid-call: `search_products`, `find_by_sku`, `get_product`, `list_categories`, `get_faqs`, `lookup_order`, `lookup_caller_orders`, `email_order_link`, `email_summary`, `save_callback`. Authenticated with a random bearer token made at setup. |
 | `webhooks/post-call` | ElevenLabs delivers the transcript here after hang-up. Checked against its HMAC signature. |
 
 Calls from other agents in the same ElevenLabs workspace are ignored.

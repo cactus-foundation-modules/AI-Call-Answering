@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describePriceRange, effectivePrice, formatPrice, priceBasis, stockSummary } from './product-format'
+import { describePriceRange, effectivePrice, formatPrice, priceBasis, quoteQuantity, stockSummary } from './product-format'
 
 const base = { trackInventory: true, stockCount: 10, lowStockThreshold: 3, outOfStockBehaviour: 'BLOCK', isPreOrder: false }
 
@@ -35,5 +35,19 @@ describe('prices', () => {
   it('describes a range', () => {
     expect(describePriceRange({ low: 90, high: 90 }, '£')).toBe('£90')
     expect(describePriceRange({ low: 90, high: 140 }, '£')).toBe('from £90 to £140')
+  })
+})
+
+describe('quoteQuantity', () => {
+  const tracked = { trackInventory: true, stockCount: 50, lowStockThreshold: 5, outOfStockBehaviour: 'BLOCK', isPreOrder: false }
+  it('works the total out to the penny', () => {
+    expect(quoteQuantity(36, 126, '£', tracked)).toMatchObject({ unitPrice: '£126', total: '£4536', stock: 'enough in stock for 36' })
+    expect(quoteQuantity(36, 4.95, '£', tracked).total).toBe('£178.20')
+  })
+  it('says when stock falls short', () => {
+    expect(quoteQuantity(80, 10, '£', tracked).stock).toBe('only 50 in stock, fewer than the 80 asked for')
+  })
+  it('defers to the plain summary when stock is not tracked', () => {
+    expect(quoteQuantity(3, 10, '£', { ...tracked, trackInventory: false }).stock).toBe('available')
   })
 })
