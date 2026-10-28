@@ -16,6 +16,7 @@ import { emailOrderLink } from './order-link'
 import { emailCallSummary, MAX_PRODUCTS_PER_EMAIL } from './call-email'
 import { isCheckableClaim } from './order-verify'
 import { lookupFaqs } from './faq-queries'
+import { paymentInfo } from './payment-queries'
 import { findBySku, getProductDetail, listTopCategories, searchProducts } from './product-queries'
 import { isPlausibleEmail } from './text'
 import type { ToolName } from './agent-config'
@@ -304,6 +305,10 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
         query: blankToNull(input.data.query),
       })
       return { result: outcome, callbackSaved: null }
+    }
+    case 'get_payment_info': {
+      if (!NoInput.safeParse(body).success) return { result: BAD_INPUT, callbackSaved: null }
+      return { result: await paymentInfo(), callbackSaved: null }
     }
     case 'lookup_order': {
       const input = OrderInput.safeParse(body)

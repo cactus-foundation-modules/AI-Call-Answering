@@ -12,6 +12,7 @@ A voice assistant that answers your phone. Built on the [Twilio module](https://
 - **Answers questions about any product** in your shop: sizes, options, price, stock, specifications and your FAQs (product, category, collection and shop-wide).
 - **Suggests products** from the shop based on what the caller needs and what they want to spend.
 - **Handles order enquiries**, but only after checking who is calling. It needs the delivery postcode plus one of the order number, the email address or the company name. Wrong answers are limited per call and per number, and nothing like an email, phone number or street address is ever read out.
+- **Explains how to pay and when the paperwork comes**: the payment methods that are switched on right now (and, for card payments, which cards and wallets are taken), when a VAT invoice is issued, and which orders get a pro-forma invoice. Read live from the shop's own settings on every call, so a change on the Payments or Invoices tab reaches the phone straight away with nothing to set up again.
 - **Emails the order link** to the address on the order, when a verified caller cannot find it in their confirmation email. The wording is editable under Settings > Emails, and the address it leaves from is chosen on the Assistant tab (needs the Unified Inbox module).
 - **Takes a message for anything it cannot handle**: the caller's name and email (read back to them to be sure), and what it is about. You are notified, and it stays flagged until you mark it done.
 - **Writes up every call** in the unified inbox with a summary, who called, which orders were checked, any callback details, and the full transcript.
@@ -26,7 +27,7 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 
 ## Setting it up
 
-1. In **Settings > AI Call Answering > Assistant**, paste the ElevenLabs key, pick a voice, set your business name, and press **Set up the assistant**. That creates the agent, its nine tools and the post-call webhook at ElevenLabs. Press it again whenever you change the voice or wording.
+1. In **Settings > AI Call Answering > Assistant**, paste the ElevenLabs key, pick a voice, set your business name, and press **Set up the assistant**. That creates the agent, its tools and the post-call webhook at ElevenLabs. Press it again whenever you change the voice or wording.
 2. In the **Twilio** tab, make sure the number has call handling on (forwarding or voicemail). That is what points the number at your site.
 3. In **Phone numbers**, tick the numbers the assistant should answer, and choose whether it answers every call or only when the number is shut or nothing would ring.
 4. Switch the assistant **on**.
@@ -37,7 +38,7 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 | --- | --- |
 | `twilio.inbound-call-handler` | The hook the Twilio module offers every call to. The assistant takes the call by asking ElevenLabs to register it and returning the connection instructions. |
 | `core.conversation-provider` | Publishes each call to the unified inbox as a phone conversation. |
-| `tools/<name>` | The ten tools the assistant calls mid-call: `search_products`, `find_by_sku`, `get_product`, `list_categories`, `get_faqs`, `lookup_order`, `lookup_caller_orders`, `email_order_link`, `email_summary`, `save_callback`. Authenticated with a random bearer token made at setup. |
+| `tools/<name>` | The eleven tools the assistant calls mid-call: `search_products`, `find_by_sku`, `get_product`, `list_categories`, `get_faqs`, `get_payment_info`, `lookup_order`, `lookup_caller_orders`, `email_order_link`, `email_summary`, `save_callback`. Authenticated with a random bearer token made at setup. |
 | `webhooks/post-call` | ElevenLabs delivers the transcript here after hang-up. Checked against its HMAC signature. |
 
 Calls from other agents in the same ElevenLabs workspace are ignored.

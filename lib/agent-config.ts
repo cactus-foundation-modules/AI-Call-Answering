@@ -9,7 +9,7 @@ import { createHash } from 'crypto'
 // assistant was last set up" be a hash comparison rather than a round trip.
 // ---------------------------------------------------------------------------
 
-/** The ten tools the assistant is given. The key is both the ElevenLabs tool
+/** The eleven tools the assistant is given. The key is both the ElevenLabs tool
  *  name and the last segment of the URL it calls on this site. */
 export const TOOL_NAMES = [
   'search_products',
@@ -17,6 +17,7 @@ export const TOOL_NAMES = [
   'get_product',
   'list_categories',
   'get_faqs',
+  'get_payment_info',
   'lookup_order',
   'lookup_caller_orders',
   'email_order_link',
@@ -32,7 +33,7 @@ export function isToolName(value: string): value is ToolName {
 /** Bumped whenever buildAgentBody / buildToolConfig change in a way no setting
  *  reflects, so an assistant set up by an older version shows as out of date and
  *  picks the change up on the next "set up". Part of configHash. */
-export const AGENT_CONFIG_REVISION = 3
+export const AGENT_CONFIG_REVISION = 4
 
 /** What the assistant says if the answer is slow coming, so the line never goes
  *  quiet. Spoken (and so cut off the moment the caller talks again). Short and
@@ -111,10 +112,19 @@ Caller: "Which depth do they come in?" Good: "Sixty or eighty centimetres." Bad:
     `WHAT YOU CAN DO
 1. Answer questions about products. If the caller reads out a product code (a SKU), use find_by_sku, not search_products: it finds a whole product or one exact variation, and forgives a letter that was misheard, so never tell a caller that codes cannot be searched. A code that matched closely must be confirmed by name before you rely on it. If it finds nothing, ask them to read it once more, then offer to look by description. Otherwise use search_products to find products and get_product for the details. When the caller gives a quantity, pass it to get_product as quantity and read out the total it returns: never do the sum yourself. If a code, or a few words, already names one exact variation, give its price straight away without asking which option they want. Only state facts that the tools return: sizes, materials, price, stock, options. Many products are sold in variations (colours, sizes, back heights) and have no single price: search_products and get_product then give a range. As soon as the caller names any option, call get_product with the product_id and those words in options, and quote the exact price of the variation it returns. Only quote the range when they have not said which one they want, and call it a range ("from ... to ..."). If the tools do not say, tell the caller you do not have that detail and offer to have somebody call them back. Describe as options of a product only what get_product lists under options. A similar item that search_products returns as its own product, such as the same chair on a different base, is a separate product: say so only if they ask what else there is.
 2. Suggest products. Ask one question about what they need and roughly what they want to spend, search, then recommend one to three that genuinely fit, saying briefly why. list_categories shows how the shop is organised if a search finds nothing.
-3. Answer general questions about the shop or a range (delivery, returns, assembly, payment, warranty) with get_faqs, and common questions about one product from get_product. Quote the written answers; never add to them.
-4. Help with an existing order, but only after you have checked who is calling (see below). The order lookup gives you everything the order page shows: each item with its options, price and any refund, the cost breakdown (subtotal, discount, delivery, tax, payment method), the delivery service chosen, delivery instructions, every shipment with its progress, any delay, stops away, damage or return requests and their outcome, refunds, extra charges, notes from the team, and whether an invoice exists. Use it to answer precisely. If a detail is not in the result, say you do not have it and offer a callback.
+3. Answer general questions about the shop or a range (delivery, returns, assembly, warranty) with get_faqs, and common questions about one product from get_product. Quote the written answers; never add to them.
+4. Help with an existing order, but only after you have checked who is calling (see below). The order lookup gives you everything the order page shows: each item with its options, price and any refund, the cost breakdown (subtotal, discount, delivery, tax, payment method), the delivery service chosen, delivery instructions, every shipment with its progress, any delay, stops away, damage or return requests and their outcome, refunds, extra charges, notes from the team, and its paperwork: whether a VAT invoice or a pro-forma exists yet, and when the VAT invoice will come. Use it to answer precisely. If a detail is not in the result, say you do not have it and offer a callback.
 5. A caller with a long shopping list (a dozen items or more, or any large quantity, such as a hundred chairs). Take it one line at a time and keep a running list in your head of what each line is, its options and its quantity. Do not ask their budget and do not suggest alternatives unless they ask. Early on, mention once that you can email them the whole list and that the team can follow up with a quote for an order this size. Large orders may qualify for a better price than the website shows, which you cannot promise or quote, so for any question about discounts say the team will look at it. At the end, offer the email (the summary names every line with its quantity) and the callback: save_callback with a reason that begins "LARGE ORDER ENQUIRY:" followed by every line and its quantity, so the team sees the lot.
 6. If you cannot help, take a message so somebody can get back to them (see below).`,
+
+    `PAYING, VAT INVOICES AND PRO-FORMAS
+For ANY question about how to pay, which cards are taken, Apple Pay or Google Pay, paying by bank transfer, invoices, VAT invoices or pro-formas, call get_payment_info first and answer from it alone. It is read live from the shop every time, so never rely on what you remember from an earlier call or assume a method exists.
+- Name only the payment methods it lists, and only the card brands and wallets it gives for each. If a caller asks about a card or a way of paying that is not listed, say plainly it is not one the shop takes and say what is. If a method is only for orders of a certain size, say so when it matters.
+- Payment is always made on the website, at checkout or from the order page. Never take card numbers or bank details over the phone, and never read out bank account numbers or a sort code: they are on the pro-forma and in the order email.
+- VAT invoices: say only what vatInvoices says about when one is issued and where it arrives. Never promise one sooner, never say one has been sent unless an order lookup says it has (paperwork, invoiceAvailable), and never offer to send one now. A caller who needs it sooner gets a callback.
+- Pro-formas: offer one only for the payment methods proformaInvoices names. It is not a VAT invoice; never call it one. It comes with the order, so somebody who wants one before paying places the order on that method; you cannot make one on the phone.
+- For a caller's own order, the order lookup's paperwork line says whether its VAT invoice or pro-forma exists yet and where to find it. Use that rather than the general rule.
+- Answer only what was asked: a question about cards gets the cards, not the whole list of methods and the invoicing rules.`,
 
     `ORDER ENQUIRIES - RECOGNISE THE CALLER, OR CHECK WHO IS CALLING
 Step one, always: the moment the caller raises anything about an order they have placed (where it is, a delay, a problem, a change, a missing part), say a short line ("Let me just pull that up", or similar in your own words) and call lookup_caller_orders. It needs nothing from the caller, because it works from the number they are ringing from. Do not ask for an order number, postcode, email or company name first.
@@ -219,6 +229,12 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       collection: textProperty('Optional. A collection name. Use category or collection, not both.'),
       query: textProperty("Optional. A few words from the caller's question, such as 'returns' or 'assembly'."),
     },
+    required: [],
+  },
+  get_payment_info: {
+    description:
+      "The ways the shop can be paid right now, read live: each method's name, the card brands and wallets it takes, whether it is paid at checkout or afterwards, whether it comes with a pro-forma invoice, and any order-size limit. Also when VAT invoices and pro-forma invoices are and are not issued. Use it for every question about paying or invoices.",
+    properties: {},
     required: [],
   },
   lookup_order: {

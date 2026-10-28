@@ -1,7 +1,11 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
-import { getShopConfigCached } from '@/modules/shop/lib/config'
+import { getShopConfigCached, type ShpConfig } from '@/modules/shop/lib/config'
+import type { ShpOrderStatus } from '@/modules/shop/lib/types'
 import { formatPrice } from './product-format'
+import { proformaAvailable } from '@/modules/shop/lib/proforma'
+import { getPaymentProvider, resolveProviderLabel } from '@/modules/shop/lib/payments/registry'
+import { orderPaperwork } from './payment-words'
 import {
   claimMatchesOrder,
   orderStatusWords,
@@ -170,6 +174,11 @@ export type VerifiedOrder = {
   /** Notes the team left that the customer can see, newest first. */
   notesFromTeam: Array<{ date: string; text: string }>
   invoiceAvailable: boolean
+  /** Whether the caller has a pro-forma invoice for it (a bank transfer order,
+   *  say). Not a VAT invoice. */
+  proformaAvailable: boolean
+  /** What to tell the caller about the order's VAT invoice and pro-forma. */
+  paperwork: string
   deliveries: Array<{
     carrier: string | null
     dispatched: string
@@ -204,7 +213,7 @@ export type OrderLookupOutcome =
 type OrderRow = {
   id: string
   order_number: string
-  status: string
+  status: ShpOrderStatus
   payment_status: string
   created_at: Date
   total: unknown
@@ -214,6 +223,7 @@ type OrderRow = {
   tax_amount: unknown
   coupon_code: string | null
   payment_method: string | null
+  original_payment_method: string | null
   shipping_rate_name: string | null
   delivery_instructions: string | null
   customer_reference: string | null
@@ -359,12 +369,32 @@ export async function nameOnOrderEmail(orderNumbers: readonly string[], email: s
   return rows[0]?.customer_name?.trim() ?? ''
 }
 
+/** Each order's payment method by the name the shop gives it today, as the
+ *  checkout and the order page say it. A method no longer installed falls back
+ *  to its code in plain words rather than to nothing. */
+async function paymentMethodNames(orders: readonly OrderRow[]): Promise<Map<string, string>> {
+  const ids = [...new Set(orders.map((order) => order.payment_method).filter((id): id is string => !!id))]
+  const names = await Promise.all(ids.map(async (id) => {
+    const provider = getPaymentProvider(id)
+    return provider ? await resolveProviderLabel(provider) : id.trim().toLowerCase().replace(/_/g, ' ')
+  }))
+  return new Map(ids.map((id, i) => [id, names[i] ?? id]))
+}
+
+function proformaFor(config: Pick<ShpConfig, 'proformaEnabled'>, order: OrderRow): boolean {
+  return proformaAvailable(config, {
+    status: order.status,
+    paymentMethod: order.payment_method ?? '',
+    originalPaymentMethod: order.original_payment_method,
+  })
+}
+
 async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
   const [orders, items, shipments, refunds, requests, charges, notes, invoices, config, timezone] = await Promise.all([
     prisma.$queryRaw<OrderRow[]>(Prisma.sql`
       SELECT o."id", o."order_number", o."status", o."payment_status", o."created_at", o."total", o."subtotal",
              o."discount_amount", o."shipping_amount", o."tax_amount", o."coupon_code", o."payment_method",
-             o."shipping_rate_name", o."delivery_instructions", o."customer_reference", o."currency", o."shipping_address",
+             o."original_payment_method", o."shipping_rate_name", o."delivery_instructions", o."customer_reference", o."currency", o."shipping_address",
              o."customer_name", o."customer_email", o."customer_phone"
       FROM "shp_orders" o WHERE o."id" IN (${Prisma.join(ids)}) ORDER BY o."created_at" DESC
     `),
@@ -404,6 +434,7 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
   ])
   const symbol = config.currencySymbol
   const invoiced = new Set(invoices.map((row) => row.order_id))
+  const methodNames = await paymentMethodNames(orders)
 
   const verified: VerifiedOrder[] = orders.map((order) => ({
     orderNumber: order.order_number,
@@ -421,7 +452,7 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
       delivery: Number(order.shipping_amount) > 0 ? money(order.shipping_amount, order, symbol) : 'free',
       deliveryService: order.shipping_rate_name?.trim() || null,
       tax: moneyOrNull(order.tax_amount, order, symbol),
-      paymentMethod: order.payment_method?.trim().toLowerCase().replace(/_/g, ' ') || null,
+      paymentMethod: order.payment_method ? methodNames.get(order.payment_method) ?? null : null,
     },
     deliveryInstructions: order.delivery_instructions?.trim() || null,
     customerReference: order.customer_reference?.trim() || null,
@@ -451,6 +482,12 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
       .slice(0, 5)
       .map((note) => ({ date: day(note.created_at), text: note.content.trim().slice(0, 500) })),
     invoiceAvailable: invoiced.has(order.id),
+    proformaAvailable: proformaFor(config, order),
+    paperwork: orderPaperwork(config, {
+      invoiced: invoiced.has(order.id),
+      proformaAvailable: proformaFor(config, order),
+      cancelledOrRefunded: order.status === 'CANCELLED' || order.status === 'REFUNDED',
+    }),
     deliveries: shipments
       .filter((shipment) => shipment.order_id === order.id)
       .map((shipment) => {
