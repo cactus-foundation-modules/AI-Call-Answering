@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeMethod, invoiceMoment, joinWords, orderPaperwork, proformaPolicy, vatInvoicePolicy, type InvoiceSettings } from './payment-words'
+import { describeMethod, invoiceMoment, joinWords, orderPaperwork, proformaPolicy, speakableInstructions, vatInvoicePolicy, type InvoiceSettings } from './payment-words'
 
 const SETTINGS: InvoiceSettings = {
   invoicesEnabled: true,
@@ -70,11 +70,11 @@ describe('describeMethod', () => {
   it('lists cards, wallets and a limit', () => {
     expect(describeMethod({
       name: 'Card payment', description: null, cards: ['Visa', 'Mastercard'], wallets: ['Apple Pay'],
-      paidAfterOrdering: false, proforma: false, onlyFor: 'orders up to £5000',
+      paidAfterOrdering: false, proforma: false, onlyFor: 'orders up to £5000', instructions: null,
     })).toBe('Card payment: Visa and Mastercard, plus Apple Pay (only for orders up to £5000)')
   })
   it('is just the name for a method with nothing to add', () => {
-    expect(describeMethod({ name: 'Bank transfer', description: null, cards: null, wallets: null, paidAfterOrdering: true, proforma: true, onlyFor: null }))
+    expect(describeMethod({ name: 'Bank transfer', description: null, cards: null, wallets: null, paidAfterOrdering: true, proforma: true, onlyFor: null, instructions: null }))
       .toBe('Bank transfer')
   })
 })
@@ -84,5 +84,19 @@ describe('joinWords', () => {
     expect(joinWords(['a', 'b', 'c'])).toBe('a, b and c')
     expect(joinWords(['a'])).toBe('a')
     expect(joinWords([])).toBe('')
+  })
+})
+
+describe('speakableInstructions', () => {
+  it('reads a bare sort code in pairs and an account number in fours', () => {
+    const words = speakableInstructions('Account name: Example Ltd\nAccount number: 12345678\nSort Code: 123456\n')
+    expect(words).toBe('Account name: Example Ltd\nAccount number: 1 2 3 4, 5 6 7 8\nSort Code: 1 2, 3 4, 5 6')
+  })
+  it('keeps the groups the owner typed', () => {
+    expect(speakableInstructions('Sort code 12-34-56, account 1234 5678')).toBe('Sort code 1 2, 3 4, 5 6, account 1 2 3 4, 5 6 7 8')
+  })
+  it('leaves prices, years and short numbers alone', () => {
+    const text = 'Orders over £1,500 placed in 2026 dispatch within 30 days.'
+    expect(speakableInstructions(text)).toBe(text)
   })
 })

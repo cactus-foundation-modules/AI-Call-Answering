@@ -5,7 +5,10 @@ import type { ShpOrderStatus } from '@/modules/shop/lib/types'
 import { formatPrice } from './product-format'
 import { proformaAvailable } from '@/modules/shop/lib/proforma'
 import { getPaymentProvider, resolveProviderLabel } from '@/modules/shop/lib/payments/registry'
-import { orderPaperwork } from './payment-words'
+import { manualPaymentInstructions, paymentOutstanding } from '@/modules/shop/lib/payment-instructions'
+import { settlementMethod } from '@/modules/shop/lib/order-pay-online'
+import type { ShpPaymentStatus } from '@/modules/shop/lib/types'
+import { orderPaperwork, speakableInstructions } from './payment-words'
 import {
   claimMatchesOrder,
   orderStatusWords,
@@ -179,6 +182,9 @@ export type VerifiedOrder = {
   proformaAvailable: boolean
   /** What to tell the caller about the order's VAT invoice and pro-forma. */
   paperwork: string
+  /** Where to send the money (bank details for a transfer), while this order
+   *  still owes it on a method settled by hand. Null otherwise. */
+  howToPay: string | null
   deliveries: Array<{
     carrier: string | null
     dispatched: string
@@ -381,6 +387,24 @@ async function paymentMethodNames(orders: readonly OrderRow[]): Promise<Map<stri
   return new Map(ids.map((id, i) => [id, names[i] ?? id]))
 }
 
+/** The words the order page prints under "how to pay" for this order, while it
+ *  still prints them: an unpaid order on a method settled by hand, by the
+ *  method it was placed with (shop's own rule, so the phone and the page never
+ *  disagree). Null once paid, cancelled or refunded. */
+function howToPayFor(config: Pick<ShpConfig, 'bankTransferInstructions' | 'cashInstructions'>, order: OrderRow): string | null {
+  const payable = {
+    status: order.status,
+    // Shop's own column, read as text; settlementMethod only asks whether it is a paid one.
+    paymentStatus: order.payment_status as ShpPaymentStatus,
+    paymentMethod: order.payment_method ?? '',
+    originalPaymentMethod: order.original_payment_method,
+    total: String(order.total),
+  }
+  if (!paymentOutstanding(payable)) return null
+  const words = manualPaymentInstructions(settlementMethod(payable), config)
+  return words ? speakableInstructions(words) : null
+}
+
 function proformaFor(config: Pick<ShpConfig, 'proformaEnabled'>, order: OrderRow): boolean {
   return proformaAvailable(config, {
     status: order.status,
@@ -488,6 +512,7 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
       proformaAvailable: proformaFor(config, order),
       cancelledOrRefunded: order.status === 'CANCELLED' || order.status === 'REFUNDED',
     }),
+    howToPay: howToPayFor(config, order),
     deliveries: shipments
       .filter((shipment) => shipment.order_id === order.id)
       .map((shipment) => {

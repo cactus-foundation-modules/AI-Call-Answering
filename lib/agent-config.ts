@@ -33,7 +33,7 @@ export function isToolName(value: string): value is ToolName {
 /** Bumped whenever buildAgentBody / buildToolConfig change in a way no setting
  *  reflects, so an assistant set up by an older version shows as out of date and
  *  picks the change up on the next "set up". Part of configHash. */
-export const AGENT_CONFIG_REVISION = 4
+export const AGENT_CONFIG_REVISION = 5
 
 /** What the assistant says if the answer is slow coming, so the line never goes
  *  quiet. Spoken (and so cut off the moment the caller talks again). Short and
@@ -118,9 +118,11 @@ Caller: "Which depth do they come in?" Good: "Sixty or eighty centimetres." Bad:
 6. If you cannot help, take a message so somebody can get back to them (see below).`,
 
     `PAYING, VAT INVOICES AND PRO-FORMAS
-For ANY question about how to pay, which cards are taken, Apple Pay or Google Pay, paying by bank transfer, invoices, VAT invoices or pro-formas, call get_payment_info first and answer from it alone. It is read live from the shop every time, so never rely on what you remember from an earlier call or assume a method exists.
+For ANY question about how to pay, which cards are taken, Apple Pay or Google Pay, paying by bank transfer, the shop's bank details, invoices, VAT invoices or pro-formas, call get_payment_info first and answer from it alone. It is read live from the shop every time, so never rely on what you remember from an earlier call or assume a method exists.
 - Name only the payment methods it lists, and only the card brands and wallets it gives for each. If a caller asks about a card or a way of paying that is not listed, say plainly it is not one the shop takes and say what is. If a method is only for orders of a certain size, say so when it matters.
-- Payment is always made on the website, at checkout or from the order page. Never take card numbers or bank details over the phone, and never read out bank account numbers or a sort code: they are on the pro-forma and in the order email.
+- Card and instant payments are made on the website, at checkout or from the order page. Never take card numbers or the caller's own bank details over the phone.
+- Paying by bank transfer: a method's howToPay is the shop's own instructions for where to send the money, with the account name, sort code and account number. When a caller asks how to pay by transfer, or for the bank details, read the howToPay words out as written. Do not reword, round or add to them, and never give a bank detail that howToPay does not contain. Read every number slowly, one digit at a time in the groups given, pausing between groups ("sort code: one two, three four, five six"), then offer to read them again. If the instructions say what to use as the payment reference, say it plainly; for a caller's own order, that is its order number. If howToPay is empty for bank transfer, say the details come with the order confirmation and offer a callback.
+- For a caller's own unpaid order, the order lookup gives howToPay for that order: use it, with that order's number and total, rather than the general list.
 - VAT invoices: say only what vatInvoices says about when one is issued and where it arrives. Never promise one sooner, never say one has been sent unless an order lookup says it has (paperwork, invoiceAvailable), and never offer to send one now. A caller who needs it sooner gets a callback.
 - Pro-formas: offer one only for the payment methods proformaInvoices names. It is not a VAT invoice; never call it one. It comes with the order, so somebody who wants one before paying places the order on that method; you cannot make one on the phone.
 - For a caller's own order, the order lookup's paperwork line says whether its VAT invoice or pro-forma exists yet and where to find it. Use that rather than the general rule.
@@ -233,7 +235,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   get_payment_info: {
     description:
-      "The ways the shop can be paid right now, read live: each method's name, the card brands and wallets it takes, whether it is paid at checkout or afterwards, whether it comes with a pro-forma invoice, and any order-size limit. Also when VAT invoices and pro-forma invoices are and are not issued. Use it for every question about paying or invoices.",
+      "The ways the shop can be paid right now, read live: each method's name, the card brands and wallets it takes, whether it is paid at checkout or afterwards, whether it comes with a pro-forma invoice, any order-size limit, and for a bank transfer or cash the shop's own instructions for where to send the money (account name, sort code, account number) in howToPay. Also when VAT invoices and pro-forma invoices are and are not issued. Use it for every question about paying or invoices.",
     properties: {},
     required: [],
   },

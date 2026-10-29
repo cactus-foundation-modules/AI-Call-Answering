@@ -2,8 +2,9 @@ import { getAvailablePaymentMethods, getShopConfigCached } from '@/modules/shop/
 import { getPaymentProvider, resolvePaymentMethodDescriptions, resolveProviderLabel } from '@/modules/shop/lib/payments/registry'
 import { orderValueLimitFor, orderValueLimitSentence } from '@/modules/shop/lib/payments/order-value-limits'
 import type { ShpPaymentProvider } from '@/modules/shop/lib/payments/provider'
+import { manualPaymentInstructions } from '@/modules/shop/lib/payment-instructions'
 import { formatPrice } from './product-format'
-import { describeMethod, proformaPolicy, vatInvoicePolicy, type PaymentMethodFacts } from './payment-words'
+import { describeMethod, proformaPolicy, speakableInstructions, vatInvoicePolicy, type PaymentMethodFacts } from './payment-words'
 
 // ---------------------------------------------------------------------------
 // How the shop can be paid, read live on every call.
@@ -12,7 +13,10 @@ import { describeMethod, proformaPolicy, vatInvoicePolicy, type PaymentMethodFac
 // on/off switches, credentials and each module's readiness all applied), in the
 // owner's order, with the owner's names and checkout wording. Card brands and
 // wallets come from the provider that takes them, so nothing here names a
-// payment module or keeps its own copy of the list. Nothing is written.
+// payment module or keeps its own copy of the list. Where to send a bank
+// transfer (or bring cash) is the same wording the thank-you page, the order
+// email and the pro-forma print, from shop settings, so new bank details reach
+// the phone the moment they are saved. Nothing is written.
 // ---------------------------------------------------------------------------
 
 async function brandsOf(provider: ShpPaymentProvider): Promise<{ cards: string[] | null; wallets: string[] | null }> {
@@ -46,6 +50,7 @@ export async function paymentMethodFacts(): Promise<PaymentMethodFacts[]> {
           orderValueLimitFor(config.paymentMethodOrderValueLimits, id),
           (amount) => formatPrice(amount, config.currencySymbol),
         ),
+        instructions: manualPaymentInstructions(id, config) || null,
       }
     }),
   )
@@ -60,9 +65,15 @@ export async function paymentInfo(): Promise<Record<string, unknown>> {
   }
   return {
     ok: true,
-    methods: methods.map((method) => ({ ...method, summary: describeMethod(method) })),
+    methods: methods.map(({ instructions, ...method }) => ({
+      ...method,
+      summary: describeMethod({ ...method, instructions }),
+      // Spoken form only: the raw wording would put "12345678" in front of a
+      // voice that says it as twelve million.
+      howToPay: instructions ? speakableInstructions(instructions) : null,
+    })),
     vatInvoices: vatInvoicePolicy(config),
     proformaInvoices: proformaPolicy(config, methods.filter((method) => method.proforma).map((method) => method.name.toLowerCase())),
-    note: 'These are the only ways to pay. Never offer one that is not listed, and never name a card brand or wallet the list does not give. Payment is made on the website, never over the phone: never take card or bank details. Do not read out bank account numbers; they are on the pro-forma and the order email.',
+    note: "These are the only ways to pay. Never offer one that is not listed, and never name a card brand or wallet the list does not give. Never take card or bank details from the caller. A method's howToPay is the shop's own wording for where to send the money, bank details included: read it out when asked, exactly as written, digit by digit, and never give bank details that are not in it.",
   }
 }

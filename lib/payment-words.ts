@@ -27,6 +27,10 @@ export type PaymentMethodFacts = {
   proforma: boolean
   /** "orders of £500 and over", where the shop limits it. */
   onlyFor: string | null
+  /** Where to send the money, in the owner's own words (bank details for a
+   *  transfer, where to bring cash), for a method settled by hand. Null where
+   *  the shop holds none. */
+  instructions: string | null
 }
 
 export type InvoiceSettings = Pick<
@@ -142,4 +146,33 @@ export function describeMethod(method: PaymentMethodFacts): string {
   if (method.wallets && method.wallets.length > 0) takes.push(joinWords(method.wallets))
   const limit = method.onlyFor ? ` (only for ${method.onlyFor})` : ''
   return takes.length > 0 ? `${method.name}: ${takes.join(', plus ')}${limit}` : `${method.name}${limit}`
+}
+
+/** A run of six or more digits, allowing single spaces or hyphens between them:
+ *  a sort code, an account number, an IBAN's digits. Shorter runs are left
+ *  alone, so a price, a year or "30 days" still reads as a number. */
+const LONG_DIGIT_RUN = /\d(?:[ -]?\d){5,}/g
+
+function spaced(digits: string): string {
+  return digits.split('').join(' ')
+}
+
+/** One long digit run, as separate digits in groups a caller can write down.
+ *  Groups the owner typed (12-34-56, 1234 5678) are kept; a bare run is split
+ *  in pairs when it is six digits long, the way a sort code is said, and in
+ *  fours otherwise. */
+function speakDigitRun(run: string): string {
+  const typedGroups = run.split(/[ -]/)
+  if (typedGroups.length > 1) return typedGroups.map(spaced).join(', ')
+  const size = run.length === 6 ? 2 : 4
+  const groups: string[] = []
+  for (let i = 0; i < run.length; i += size) groups.push(run.slice(i, i + size))
+  return groups.map(spaced).join(', ')
+}
+
+/** The owner's payment instructions with every sort code and account number
+ *  turned into separate digits ("1 2, 3 4, 5 6"), so the voice reads them one
+ *  at a time instead of as "twelve million...". Everything else is untouched. */
+export function speakableInstructions(text: string): string {
+  return text.trim().replace(LONG_DIGIT_RUN, speakDigitRun)
 }
