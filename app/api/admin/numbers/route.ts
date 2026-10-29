@@ -53,7 +53,9 @@ export async function PUT(request: NextRequest) {
   const { error } = await guard()
   if (error) return error
   const parsed = Body.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return errorResponse('Those settings did not make sense.')
+  if (!parsed.success) return errorResponse(
+    `Could not save: ${[...new Set(parsed.error.issues.map((i) => `${i.path.join('.') || 'request'} - ${i.message}`))].join('; ')}.`,
+  )
 
   // Only numbers the twilio module already has can be given to the assistant.
   const number = (await getSiteNumbers()).find((candidate) => candidate.phoneSid === parsed.data.phoneSid)

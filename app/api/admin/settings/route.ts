@@ -69,6 +69,43 @@ export async function GET() {
   return NextResponse.json(await currentState(), { headers: { 'Cache-Control': 'no-store' } })
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  apiKey: 'API key',
+  voiceId: 'Voice',
+  ttsModel: 'Voice model',
+  llm: 'Language model',
+  language: 'Language',
+  businessName: 'Business name',
+  greeting: 'Greeting',
+  extraInstructions: 'Extra instructions',
+  emailSignature: 'Email signature',
+  maxCallMinutes: 'Maximum call length',
+  enabled: 'Switch on/off',
+  clearApiKey: 'Clear API key',
+}
+
+/** Spells out which field failed and why, instead of a blanket "did not make sense". */
+function describeIssue(issue: z.ZodIssue): string {
+  const key = String(issue.path[0] ?? '')
+  const label = FIELD_LABELS[key] ?? (key || 'Settings')
+  switch (issue.code) {
+    case 'too_big':
+      return issue.type === 'string'
+        ? `${label} is too long (${issue.maximum} characters at most).`
+        : `${label} must be ${issue.maximum} or less.`
+    case 'too_small':
+      return issue.type === 'string'
+        ? `${label} cannot be empty.`
+        : `${label} must be ${issue.minimum} or more.`
+    case 'invalid_type':
+      return issue.received === 'undefined' || issue.received === 'null'
+        ? `${label} is missing.`
+        : `${label} is the wrong kind of value (expected ${issue.expected}, got ${issue.received}).`
+    default:
+      return `${label}: ${issue.message}`
+  }
+}
+
 const Body = z.object({
   enabled: z.boolean().optional(),
   apiKey: z.string().trim().min(1).max(500).optional(),
@@ -88,8 +125,13 @@ export async function PATCH(request: NextRequest) {
   const { error } = await guard()
   if (error) return error
 
-  const parsed = Body.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return errorResponse('Those settings did not make sense.')
+  const raw = await request.json().catch(() => null)
+  if (raw === null || typeof raw !== 'object') return errorResponse('The save request arrived empty or unreadable. Reload the page and try again.')
+  const parsed = Body.safeParse(raw)
+  if (!parsed.success) {
+    const problems = [...new Set(parsed.error.issues.map(describeIssue))]
+    return errorResponse(`Could not save: ${problems.join(' ')}`)
+  }
 
   // Switching the assistant on with nothing behind it would send callers to
   // forwarding anyway, but it would look as though it were working.

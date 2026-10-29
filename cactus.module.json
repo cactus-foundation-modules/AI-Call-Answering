@@ -1,6 +1,6 @@
 {
   "name": "ai-call-answering",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "tablePrefix": "acall_",
   "notificationKinds": [
     {"id": "callback", "label": "Callback requests from the phone assistant", "description": "The phone assistant could not help a caller and took their name and email so somebody can get back to them.", "dedupePrefix": "ai-call-answering:callback:"},
