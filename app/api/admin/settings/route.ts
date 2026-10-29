@@ -7,6 +7,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { assistantNeedsSetup, autoResyncDue, fallbackNeedsSetup, postCallWebhookUrl } from '@/modules/ai-call-answering/lib/agent-sync'
 import { MAX_FALLBACK_KEYS, listFallbackKeys } from '@/modules/ai-call-answering/lib/fallback-keys'
+import { EXTRA_INSTRUCTIONS_MAX_LENGTH } from '@/modules/ai-call-answering/lib/instruction-conflicts'
 import {
   LANGUAGE_CHOICES,
   LLM_CHOICES,
@@ -116,7 +117,7 @@ const Body = z.object({
   language: z.string().trim().min(1).max(10).optional(),
   businessName: z.string().trim().max(120).optional(),
   greeting: z.string().trim().max(600).optional(),
-  extraInstructions: z.string().max(4000).optional(),
+  extraInstructions: z.string().max(EXTRA_INSTRUCTIONS_MAX_LENGTH).optional(),
   emailSignature: z.string().max(10000).optional(),
   maxCallMinutes: z.number().int().min(1).max(MAX_CALL_MINUTES_LIMIT).optional(),
 })

@@ -9,6 +9,14 @@
 //
 // Pure and dependency-free: the settings screen runs it as the owner types.
 
+/**
+ * Longest the extra instructions may be, counted the way the browser and the
+ * save check both count (`String.length`), so the counter under the box and
+ * the refusal can never disagree. Plain file with no directive: the settings
+ * tab and the save route both read it.
+ */
+export const EXTRA_INSTRUCTIONS_MAX_LENGTH = 10000
+
 export type InstructionConflict = {
   /** The sentence that triggered it, as written. */
   quote: string

@@ -17,7 +17,7 @@ import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/
 import { InfoTip } from '@/components/admin/InfoTip'
 import type { ModuleSettingsTabProps } from '@/lib/modules/hosted-settings'
 import { VoicePicker, type Voice } from './VoicePicker'
-import { findInstructionConflicts } from '@/modules/ai-call-answering/lib/instruction-conflicts'
+import { EXTRA_INSTRUCTIONS_MAX_LENGTH, findInstructionConflicts } from '@/modules/ai-call-answering/lib/instruction-conflicts'
 
 const SETTINGS_API = '/api/m/ai-call-answering/admin/settings'
 const SYNC_API = '/api/m/ai-call-answering/admin/sync'
@@ -457,8 +457,9 @@ function AssistantSection() {
           </div>
           <div className="field">
             <label>Extra instructions</label>
-            <textarea rows={6} value={draft.extraInstructions} onChange={(e) => set('extraInstructions', e.target.value)} />
+            <textarea rows={6} maxLength={EXTRA_INSTRUCTIONS_MAX_LENGTH} value={draft.extraInstructions} onChange={(e) => set('extraInstructions', e.target.value)} />
             <p className="field-hint">
+              {draft.extraInstructions.length.toLocaleString()} / {EXTRA_INSTRUCTIONS_MAX_LENGTH.toLocaleString()} characters.{' '}
               Anything particular to your business: opening hours, how you handle returns, what never to promise. These are
               added to the built-in rules, which already cover checking who is calling before discussing an order and
               taking a name and email when it cannot help.
