@@ -9,6 +9,7 @@ import {
 } from './calls'
 import { knownAgentIds, listFallbackKeys } from './fallback-keys'
 import { getSettings } from './settings'
+import { fileTranscriptGaps } from './unanswered'
 
 // ---------------------------------------------------------------------------
 // The post-call webhook: ElevenLabs tells us, a few seconds after hang-up, what
@@ -149,6 +150,10 @@ export async function ingestPostCall(payload: PostCallPayloadType): Promise<Inge
     summary: (data.analysis?.transcript_summary ?? '').trim() || fallbackSummary(transcript),
     transcript,
     startedAt: typeof startSeconds === 'number' ? new Date(startSeconds * 1000) : null,
+  })
+  // A list that cannot be written must not cost the call its record.
+  await fileTranscriptGaps(call.id, transcript).catch((error: unknown) => {
+    console.error('[ai-call-answering] could not file unanswered questions', error)
   })
   return { status: 'filed', callId: call.id }
 }

@@ -5,6 +5,7 @@ import { renderProductTable } from '@/modules/unified-inbox/lib/products/render'
 import { resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
 import { toProductRefs } from './product-queries'
+import { basketUrl, getCallBasket } from './phone-basket'
 import { getSettings } from './settings'
 import { isPlausibleEmail } from './text'
 import { askWhichEmailMessage, chooseOrderEmail } from './email-choice'
@@ -83,6 +84,15 @@ export function pickRecipient(
   return callback && isPlausibleEmail(callback) ? { email: callback, fromOrder: false } : null
 }
 
+/** A call with a phone basket gets its link in the email too, so a caller on a
+ *  landline (who cannot be texted) still leaves with something to act on. */
+async function basketParagraph(callId: string): Promise<string> {
+  const basket = await getCallBasket(callId)
+  if (!basket || basket.lines.length === 0) return ''
+  const url = basketUrl(basket.token)
+  return `<p><a href="${escapeHtml(url)}">Open the basket we put together on the phone</a> to see prices and delivery and check out.</p>`
+}
+
 export type SummaryInput = {
   email: string | null
   name: string | null
@@ -118,7 +128,7 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
     customerName: input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || 'there',
     subject: cleanSubject(input.subject),
-    summaryHtml: textToHtml(summary),
+    summaryHtml: textToHtml(summary) + (await basketParagraph(call.id)),
     productsHtml: listing,
     hasProducts: listing ? 'true' : '',
     signatureHtml: signatureHtml(settings.emailSignature),

@@ -13,7 +13,8 @@ import {
   updateAgent,
   updateTool,
 } from './elevenlabs'
-import { TOOL_NAMES, buildAgentBody, buildToolConfig, configHash, type AgentInputs } from './agent-config'
+import { TOOL_NAMES, buildAgentBody, buildToolConfig, configHash, onlyCodeChanged, type AgentInputs } from './agent-config'
+import { callInProgress } from './calls'
 import {
   listFallbackKeys,
   saveFallbackProvisioned,
@@ -73,6 +74,44 @@ export function fallbackNeedsSetup(settings: AiCallSettings, fallback: FallbackK
   if (!fallback.agentId || !fallback.postCallWebhookId || !settings.toolsToken) return true
   const current = agentInputsFrom(settings, siteUrl, settings.toolsToken, fallback.toolIds, fallback.postCallWebhookId)
   return configHash(current) !== fallback.syncedHash
+}
+
+/** Whether the hourly job should set the assistant up again unattended: it has
+ *  been set up before, and the main key or a fallback is out of date only
+ *  because the module itself was updated. A setting somebody changed and has
+ *  not pushed yet is theirs to push, so any such change stops it. */
+export function autoResyncDue(settings: AiCallSettings, fallbacks: FallbackKey[], siteUrl: string): boolean {
+  if (!settings.apiKey || !settings.agentId || !settings.postCallWebhookId || !settings.toolsToken) return false
+  const main = agentInputsFrom(settings, siteUrl, settings.toolsToken, settings.toolIds, settings.postCallWebhookId)
+  if (configHash(main) !== settings.syncedHash && !onlyCodeChanged(main, settings.syncedHash)) return false
+  let due = configHash(main) !== settings.syncedHash
+  for (const fallback of fallbacks) {
+    if (!fallback.apiKey || !fallback.agentId || !fallback.postCallWebhookId) continue
+    const inputs = agentInputsFrom(settings, siteUrl, settings.toolsToken, fallback.toolIds, fallback.postCallWebhookId)
+    if (configHash(inputs) === fallback.syncedHash) continue
+    if (!onlyCodeChanged(inputs, fallback.syncedHash)) return false
+    due = true
+  }
+  return due
+}
+
+export type AutoResyncOutcome =
+  | { status: 'up_to_date' | 'waiting_for_owner' | 'call_in_progress' }
+  | { status: 'resynced'; fallbackFailures: FallbackFailure[] }
+
+/** The hourly job: brings the ElevenLabs side up to date after a module update,
+ *  so a release reaches the phone without anybody pressing "Set up the
+ *  assistant". Never while a call is live: the caller keeps the version they
+ *  started with, and the next tick catches up. */
+export async function autoResync(): Promise<AutoResyncOutcome> {
+  const settings = await getSettings()
+  const siteUrl = getSiteUrl()
+  if (!autoResyncDue(settings, await listFallbackKeys(), siteUrl)) {
+    return { status: assistantNeedsSetup(settings, siteUrl) ? 'waiting_for_owner' : 'up_to_date' }
+  }
+  if (await callInProgress(settings.maxCallMinutes)) return { status: 'call_in_progress' }
+  const { fallbackFailures } = await provisionAssistant()
+  return { status: 'resynced', fallbackFailures }
 }
 
 async function upsertTool(apiKey: string, existingId: string | undefined, config: Record<string, unknown>): Promise<string> {

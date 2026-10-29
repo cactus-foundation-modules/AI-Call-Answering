@@ -5,7 +5,7 @@ import { getSiteUrl } from '@/lib/config/env'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { assistantNeedsSetup, fallbackNeedsSetup, postCallWebhookUrl } from '@/modules/ai-call-answering/lib/agent-sync'
+import { assistantNeedsSetup, autoResyncDue, fallbackNeedsSetup, postCallWebhookUrl } from '@/modules/ai-call-answering/lib/agent-sync'
 import { MAX_FALLBACK_KEYS, listFallbackKeys } from '@/modules/ai-call-answering/lib/fallback-keys'
 import {
   LANGUAGE_CHOICES,
@@ -44,6 +44,8 @@ async function currentState() {
     agentId: settings.agentId,
     isSetUp: !!settings.agentId,
     needsSetup: assistantNeedsSetup(settings, siteUrl) || fallbacks.some((f) => fallbackNeedsSetup(settings, f, siteUrl)),
+    // Out of date only because the module was updated: the hourly job pushes it.
+    updatePending: autoResyncDue(settings, fallbacks, siteUrl),
     // Never the keys themselves.
     fallbackKeys: fallbacks.map((f) => ({
       id: f.id,

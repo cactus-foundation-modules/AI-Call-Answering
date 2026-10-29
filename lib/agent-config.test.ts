@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { describe, expect, it } from 'vitest'
 import {
   TOOL_NAMES,
@@ -5,6 +6,7 @@ import {
   buildPrompt,
   buildToolConfig,
   configHash,
+  onlyCodeChanged,
   defaultGreeting,
   isToolName,
   thinkingFiller,
@@ -137,5 +139,72 @@ describe('isToolName', () => {
   it('knows its tools', () => {
     expect(isToolName('lookup_order')).toBe(true)
     expect(isToolName('drop_table')).toBe(false)
+  })
+})
+
+describe('onlyCodeChanged', () => {
+  const legacy = (input: AgentInputs, revision: number) => {
+    const comparable: Partial<AgentInputs> = { ...input }
+    delete comparable.toolsToken
+    return createHash('sha256').update(JSON.stringify({ ...comparable, revision })).digest('hex').slice(0, 32)
+  }
+
+  it('is false when nothing changed', () => {
+    expect(onlyCodeChanged(inputs, configHash(inputs))).toBe(false)
+  })
+
+  it('is true when only the code half moved on', () => {
+    const [owner] = configHash(inputs).split('.')
+    expect(onlyCodeChanged(inputs, `${owner}.olderversion`)).toBe(true)
+  })
+
+  it('is false when an owner setting changed', () => {
+    const stored = configHash({ ...inputs, greeting: 'Hello' })
+    expect(onlyCodeChanged(inputs, stored)).toBe(false)
+  })
+
+  it('recognises an assistant set up by revision 5 with the same settings', () => {
+    expect(onlyCodeChanged(inputs, legacy(inputs, 5))).toBe(true)
+    expect(onlyCodeChanged(inputs, legacy({ ...inputs, voiceId: 'other' }, 5))).toBe(false)
+  })
+
+  it('never auto-syncs something never set up', () => {
+    expect(onlyCodeChanged(inputs, '')).toBe(false)
+  })
+})
+
+describe('disclosure', () => {
+  it('never claims to be a person and never needs the word AI', () => {
+    const prompt = buildPrompt(inputs)
+    expect(prompt).toContain('You are not a person')
+    expect(prompt).toContain('automated assistant')
+    expect(prompt).not.toMatch(/\bAI\b|artificial intelligence/i)
+  })
+})
+
+describe('tool schemas', () => {
+  // ElevenLabs refuses the whole agent when any property, however deeply
+  // nested, has no description - which once took the assistant off the phone.
+  const missing = (properties: Record<string, unknown>, path: string): string[] =>
+    Object.entries(properties).flatMap(([key, value]) => {
+      const prop = value as Record<string, unknown>
+      if (prop.dynamic_variable) return []
+      const here = `${path}.${key}`
+      const own = typeof prop.description === 'string' && prop.description ? [] : [here]
+      const items = prop.items as Record<string, unknown> | undefined
+      const nested = items
+        ? [
+            ...(typeof items.description === 'string' && items.description ? [] : [`${here}[]`]),
+            ...(items.properties ? missing(items.properties as Record<string, unknown>, `${here}[]`) : []),
+          ]
+        : []
+      return [...own, ...nested]
+    })
+
+  it('describes every property of every tool', () => {
+    for (const name of TOOL_NAMES) {
+      const config = buildToolConfig(name, 'https://example.co.uk', 'token') as { api_schema: { request_body_schema: { properties: Record<string, unknown> } } }
+      expect(missing(config.api_schema.request_body_schema.properties, name)).toEqual([])
+    }
   })
 })

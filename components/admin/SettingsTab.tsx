@@ -17,6 +17,7 @@ import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/
 import { InfoTip } from '@/components/admin/InfoTip'
 import type { ModuleSettingsTabProps } from '@/lib/modules/hosted-settings'
 import { VoicePicker, type Voice } from './VoicePicker'
+import { findInstructionConflicts } from '@/modules/ai-call-answering/lib/instruction-conflicts'
 
 const SETTINGS_API = '/api/m/ai-call-answering/admin/settings'
 const SYNC_API = '/api/m/ai-call-answering/admin/sync'
@@ -24,6 +25,7 @@ const FALLBACK_KEYS_API = '/api/m/ai-call-answering/admin/fallback-keys'
 const VOICES_API = '/api/m/ai-call-answering/admin/voices'
 const NUMBERS_API = '/api/m/ai-call-answering/admin/numbers'
 const CALLS_API = '/api/m/ai-call-answering/admin/calls'
+const UNANSWERED_API = '/api/m/ai-call-answering/admin/unanswered'
 
 type Choice = { id: string; label: string }
 
@@ -43,6 +45,7 @@ type State = {
   agentId: string | null
   isSetUp: boolean
   needsSetup: boolean
+  updatePending: boolean
   syncedAt: string | null
   webhookUrl: string
   ttsModels: Choice[]
@@ -93,6 +96,7 @@ const SUB_TABS = [
   { key: 'assistant', label: 'Assistant' },
   { key: 'numbers', label: 'Phone numbers' },
   { key: 'calls', label: 'Calls' },
+  { key: 'unanswered', label: 'Unanswered' },
 ] as const
 type SubTab = (typeof SUB_TABS)[number]['key']
 
@@ -269,7 +273,14 @@ function AssistantSection() {
   })
 
   let status = 'Not set up yet'
-  if (saved.isSetUp) status = saved.needsSetup ? 'Set up, but your settings have changed since' : 'Set up and up to date'
+  if (saved.isSetUp) {
+    status = !saved.needsSetup
+      ? 'Set up and up to date'
+      : saved.updatePending
+        ? 'Set up. A module update is waiting and goes to the assistant within the hour'
+        : 'Set up, but your settings have changed since'
+  }
+  const conflicts = findInstructionConflicts(draft.extraInstructions)
 
   return (
     <div>
@@ -452,6 +463,16 @@ function AssistantSection() {
               added to the built-in rules, which already cover checking who is calling before discussing an order and
               taking a name and email when it cannot help.
             </p>
+            {conflicts.length > 0 && (
+              <div className="field-hint" role="status">
+                <strong>These lines work against the built-in rules:</strong>
+                {conflicts.map((conflict) => (
+                  <p key={conflict.advice}>
+                    &ldquo;{conflict.quote}&rdquo; - {conflict.advice}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -640,6 +661,100 @@ function CallsSection() {
   )
 }
 
+type UnansweredRow = {
+  id: string
+  callId: string
+  question: string
+  topic: string
+  source: 'tool' | 'transcript'
+  createdAt: string
+  resolved: boolean
+}
+
+const UNANSWERED_SPANS = [
+  { days: 7, label: 'This week' },
+  { days: 30, label: 'Last 30 days' },
+  { days: 90, label: 'Last 90 days' },
+] as const
+
+function UnansweredSection() {
+  const [days, setDays] = useState<number>(7)
+  const [items, setItems] = useState<UnansweredRow[] | null>(null)
+  const [err, setErr] = useState('')
+
+  const load = useCallback(async (span: number) => {
+    try {
+      const res = await fetch(`${UNANSWERED_API}?days=${span}`)
+      if (!res.ok) return
+      setItems((await res.json() as { items: UnansweredRow[] }).items)
+    } catch { /* retried on next open */ }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      await Promise.resolve()
+      if (cancelled) return
+      await load(days)
+    })()
+    return () => { cancelled = true }
+  }, [load, days])
+
+  const toggle = async (id: string, resolved: boolean) => {
+    setErr('')
+    try {
+      const res = await fetch(UNANSWERED_API, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, resolved }) })
+      if (!res.ok) setErr(await readError(res, 'Could not save that.'))
+      await load(days)
+    } catch {
+      setErr('Could not reach the site.')
+    }
+  }
+
+  if (!items) return <p className="field-hint">Loading…</p>
+  const open = items.filter((item) => !item.resolved).length
+
+  return (
+    <div className="settings-cols">
+      <div className="card">
+        <div className="card-title">
+          Questions it could not answer
+          <InfoTip>
+            Each one is a caller question the assistant had no answer for. Most want an FAQ, a line on a page or a product spec
+            filling in. Tick one off once it is dealt with. A notification lists the week&rsquo;s count every Monday.
+          </InfoTip>
+        </div>
+        <div className="field">
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            {UNANSWERED_SPANS.map((span) => <option key={span.days} value={span.days}>{span.label}</option>)}
+          </select>
+        </div>
+        {err && <div className="alert alert-error">{err}</div>}
+        {items.length === 0 && <p className="field-hint">Nothing went unanswered in this period.</p>}
+        {items.length > 0 && <p className="field-hint"><strong>{open}</strong> still to deal with.</p>}
+        {items.map((item) => (
+          <div key={item.id} style={{ borderTop: '1px solid var(--color-border)', padding: '0.5rem 0', opacity: item.resolved ? 0.6 : 1 }}>
+            <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+              <input type="checkbox" checked={item.resolved} onChange={(e) => { void toggle(item.id, e.target.checked) }} />
+              <span>
+                {item.question}
+                <br />
+                <span className="field-hint">
+                  {new Date(item.createdAt).toLocaleString()}
+                  {item.topic ? ` - ${item.topic}` : ''}
+                  {item.source === 'transcript' ? ' - spotted in the transcript' : ''}
+                  {' - '}
+                  <a href={`?tab=ai-call-answering&sub=calls&call=${encodeURIComponent(item.callId)}`}>open the call</a>
+                </span>
+              </span>
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // A panel another module may publish at the foot of the Assistant tab. The
 // unified inbox uses it to ask which address the order links go out from. An
 // empty slot renders nothing - no heading, no gap.
@@ -656,6 +771,7 @@ export function AiCallAnsweringSettingsTab({ hostedSettingsSlots }: ModuleSettin
       {sub === 'assistant' && hostedSettingsSlots?.[HOSTED_EMAIL_SLOT]}
       {sub === 'numbers' && <NumbersSection />}
       {sub === 'calls' && <CallsSection />}
+      {sub === 'unanswered' && <UnansweredSection />}
     </div>
   )
 }

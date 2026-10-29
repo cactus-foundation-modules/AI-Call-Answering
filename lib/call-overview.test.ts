@@ -28,6 +28,7 @@ const base: CallRecord = {
   failedOrderChecks: 0,
   emailsSent: 0,
   emailedTo: '',
+  toolLog: [],
   updatedAt: new Date('2026-10-18T10:02:00Z'),
 }
 
@@ -69,5 +70,19 @@ describe('buildTranscriptText', () => {
   it('labels each side', () => {
     expect(buildTranscriptText(base)).toBe('Assistant: Hello\nCaller: Do you do standing desks?')
     expect(buildTranscriptText({ ...base, transcript: [] })).toBe('No transcript was recorded.')
+  })
+})
+
+describe('buildTranscriptText with lookups', () => {
+  it('slots each lookup in before the next line spoken', () => {
+    const text = buildTranscriptText({
+      ...base,
+      transcript: [
+        { role: 'caller', text: 'Bank details?', at: 10 },
+        { role: 'assistant', text: 'Here they are.', at: 15 },
+      ],
+      toolLog: [{ tool: 'get_payment_info', at: 12, ms: 300, input: {}, result: { ok: true }, failed: false }],
+    })
+    expect(text).toBe('Caller: Bank details?\n[Looked up get_payment_info: ok]\nAssistant: Here they are.')
   })
 })

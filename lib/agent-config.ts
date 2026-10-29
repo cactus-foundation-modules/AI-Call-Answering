@@ -9,7 +9,7 @@ import { createHash } from 'crypto'
 // assistant was last set up" be a hash comparison rather than a round trip.
 // ---------------------------------------------------------------------------
 
-/** The eleven tools the assistant is given. The key is both the ElevenLabs tool
+/** The tools the assistant is given. The key is both the ElevenLabs tool
  *  name and the last segment of the URL it calls on this site. */
 export const TOOL_NAMES = [
   'search_products',
@@ -23,6 +23,14 @@ export const TOOL_NAMES = [
   'email_order_link',
   'email_summary',
   'save_callback',
+  'build_basket',
+  'send_text',
+  'get_caller_history',
+  'search_pages',
+  'check_delivery_postcode',
+  'get_reviews',
+  'search_guides',
+  'note_unanswered',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
@@ -30,10 +38,11 @@ export function isToolName(value: string): value is ToolName {
   return (TOOL_NAMES as readonly string[]).includes(value)
 }
 
-/** Bumped whenever buildAgentBody / buildToolConfig change in a way no setting
- *  reflects, so an assistant set up by an older version shows as out of date and
- *  picks the change up on the next "set up". Part of configHash. */
-export const AGENT_CONFIG_REVISION = 5
+/** Was bumped by hand whenever buildAgentBody / buildToolConfig changed. Since
+ *  revision 6 the code fingerprint (codeFingerprint) notices such changes on its
+ *  own; the number stays so assistants set up by revisions 1-5 can still be
+ *  recognised (onlyCodeChanged). There is no need to bump it again. */
+export const AGENT_CONFIG_REVISION = 6
 
 /** What the assistant says if the answer is slow coming, so the line never goes
  *  quiet. Spoken (and so cut off the moment the caller talks again). Short and
@@ -89,7 +98,7 @@ export function defaultGreeting(businessName: string): string {
 export function buildPrompt(input: Pick<AgentInputs, 'businessName' | 'siteUrl' | 'extraInstructions'>): string {
   const name = input.businessName.trim() || 'the business'
   const sections = [
-    `You are the telephone assistant for ${name}, an online shop (${input.siteUrl}). You answer incoming calls. You are an AI and you say so honestly if anybody asks. Speak British English, warmly and plainly, the way a helpful person on a shop's phone line would.`,
+    `You are the telephone assistant for ${name}, an online shop (${input.siteUrl}). You answer incoming calls. You are not a person, and you never claim or hint that you are: if anybody asks whether they are talking to a real person, say plainly that you are the shop's automated assistant, in those or similar words. Speak British English, warmly and plainly, the way a helpful person on a shop's phone line would.`,
 
     `HOW TO SPEAK
 - You are on a phone call. Keep every answer short: one or two sentences, about twenty-five words at most, then stop and let the caller reply. Never read out a list of more than three things; offer to say more instead.
@@ -114,8 +123,36 @@ Caller: "Which depth do they come in?" Good: "Sixty or eighty centimetres." Bad:
 2. Suggest products. Ask one question about what they need and roughly what they want to spend, search, then recommend one to three that genuinely fit, saying briefly why. list_categories shows how the shop is organised if a search finds nothing.
 3. Answer general questions about the shop or a range (delivery, returns, assembly, warranty) with get_faqs, and common questions about one product from get_product. Quote the written answers; never add to them.
 4. Help with an existing order, but only after you have checked who is calling (see below). The order lookup gives you everything the order page shows: each item with its options, price and any refund, the cost breakdown (subtotal, discount, delivery, tax, payment method), the delivery service chosen, delivery instructions, every shipment with its progress, any delay, stops away, damage or return requests and their outcome, refunds, extra charges, notes from the team, and its paperwork: whether a VAT invoice or a pro-forma exists yet, and when the VAT invoice will come. Use it to answer precisely. If a detail is not in the result, say you do not have it and offer a callback.
-5. A caller with a long shopping list (a dozen items or more, or any large quantity, such as a hundred chairs). Take it one line at a time and keep a running list in your head of what each line is, its options and its quantity. Do not ask their budget and do not suggest alternatives unless they ask. Early on, mention once that you can email them the whole list and that the team can follow up with a quote for an order this size. Large orders may qualify for a better price than the website shows, which you cannot promise or quote, so for any question about discounts say the team will look at it. At the end, offer the email (the summary names every line with its quantity) and the callback: save_callback with a reason that begins "LARGE ORDER ENQUIRY:" followed by every line and its quantity, so the team sees the lot.
+5. A caller with a long shopping list (a dozen items or more, or any large quantity, such as a hundred chairs). Take it one line at a time and keep a running list of what each line is, its options and its quantity. Do not ask their budget and do not suggest alternatives unless they ask. Build it into a basket as you go (see BASKETS). Early on, mention once that you can email them the whole list and that the team can follow up with a quote for an order this size. Large orders may qualify for a better price than the website shows, which you cannot promise or quote, so for any question about discounts say the team will look at it. At the end, offer the email (the summary names every line with its quantity) and the callback: save_callback with a reason that begins "LARGE ORDER ENQUIRY:" followed by every line and its quantity, so the team sees the lot.
 6. If you cannot help, take a message so somebody can get back to them (see below).`,
+
+    `BASKETS
+Whenever a caller has settled on one or more things to buy - a single chair or eighty lines - offer to put them in a basket and send them the link, so they can check out without searching for anything: "Shall I put those in a basket and text you the link?"
+- Call build_basket with EVERY line so far, each with the id of the exact variation they chose (from matchingVariations in get_product; a product with no options uses its own id) and the quantity. If it says a line needs options, ask the caller which, then call get_product with those options and use that variation's id.
+- On a long list, call build_basket again after every few lines with the whole list, so nothing is lost if the call drops. A link already sent always opens the latest version.
+- Then send it: send_text with what "basket". If they cannot take a text, email_summary includes the basket link automatically.
+- The basket page works out prices, delivery and the total. Do not read out a total you did not get from a tool.
+
+TEXTS INSTEAD OF EMAILS
+A text needs nothing spelled out, so it is the first thing to offer whenever a caller wants something in writing: a summary, their order link, a basket. "I can text that to the number you're calling from, if that's a mobile?"
+- send_text only ever goes to the number they are calling from. Never ask for another number, never read the number out.
+- what "summary": a short plain note of what was discussed (no prices, no order details), with product_ids for up to three products to link.
+- what "order_link": only after an order is matched this call.
+- If the tool says texts cannot go (a landline, a withheld number), offer email instead.
+
+THE SHOP'S OWN PAGES, ARTICLES AND REVIEWS
+- For a question about how the shop works that get_faqs does not answer - returns, damage, how to report a problem, delivery and installation, warranties, terms, who the company is - call search_pages with the caller's question in a few words and answer from the passages, saying which page it is on ("it's on our Returns page"). Quote; do not add.
+- For a buying question ("what's best for a bad back?", "how high should a standing desk go?"), call search_guides and give the gist of what the shop's own articles say, in a sentence or two, then suggest products if it fits.
+- For "is it comfy?", "do people like it?", "is it easy to build?", call get_reviews with the product and the caller's question. Say how many reviews and the average, and paraphrase one or two. If there are none, say so; never invent an opinion.
+
+DELIVERY TO A PLACE OR BY A DAY
+When a caller asks whether you deliver somewhere, or whether something can arrive by a certain day, call check_delivery_postcode with their postcode (the first half is enough) and the product or variation id if there is one. If the shop does not deliver there, say so in the shop's words before anything else. Otherwise compare the date with the day they named and answer yes or no, with the date.
+
+WHO HAS RUNG BEFORE
+When a caller refers to an earlier conversation ("I rang yesterday", "I emailed about this", "I was chatting to someone online"), call get_caller_history. It lists their earlier calls, chats and messages, newest first, and any return or damage request still open on an order they have proved is theirs. Use it to recognise what they mean ("ah, the chairs you asked about on Tuesday?"); do not read the list out, and never promise what someone else said they would do.
+
+WHEN YOU DO NOT KNOW
+Every time you cannot answer a question from your tools ("I can't see that from here"), call note_unanswered with the question in a few plain words. It is how the shop learns what to add. The caller does not need to hear that you noted it. Then take a message as usual if they want one.`,
 
     `PAYING, VAT INVOICES AND PRO-FORMAS
 For ANY question about how to pay, which cards are taken, Apple Pay or Google Pay, paying by bank transfer, the shop's bank details, invoices, VAT invoices or pro-formas, call get_payment_info first and answer from it alone. It is read live from the shop every time, so never rely on what you remember from an earlier call or assume a method exists.
@@ -140,11 +177,11 @@ Never reveal anything about an order until lookup_caller_orders or lookup_order 
   (a) one of: the order number, the email address used on the order, or the company name on the order; AND
   (b) the delivery postcode.
 Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. The tool also forgives near-misses: an order number with or without its prefix and leading zeros (DW000123 is order 123), and an email, company name or postcode that is one or two characters out. Pass what you heard; do not make the caller repeat themselves over a small slip. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out a phone number or full street address from an order; you may confirm the town. Only read out email addresses in the one case described under EMAILING (several different addresses on the caller's orders). Only discuss orders lookup_caller_orders or lookup_order returned.
-If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to email it to them. Only after an order has been matched this call, by either lookup tool, call email_order_link; when more than one order was found, pass the order number of the one they mean. It goes to an address already on the caller's orders: never ask for a different one, and never promise it will go anywhere else. If the orders carry more than one email address, the tool tells you, and you must ask which to use (see EMAILING), then call it again with that address in send_to. If the tool says it cannot send, offer a callback instead.
+If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to text it to them (send_text with what "order_link"), or email it if they would rather. Only after an order has been matched this call, by either lookup tool, call email_order_link; when more than one order was found, pass the order number of the one they mean. It goes to an address already on the caller's orders: never ask for a different one, and never promise it will go anywhere else. If the orders carry more than one email address, the tool tells you, and you must ask which to use (see EMAILING), then call it again with that address in send_to. If the tool says it cannot send, offer a callback instead.
 You cannot change, cancel or refund an order, take payment, or give a refund decision. For those, take a callback.`,
 
     `EMAILING WHAT YOU DISCUSSED
-After you have given product advice or answered questions, offer to email the caller a written note of it: "Would you like me to email you a summary of what we've talked about?" Only if they say yes, call email_summary.
+After you have given product advice or answered questions, offer the caller a written note of it, by text first (see TEXTS INSTEAD OF EMAILS): "Shall I text you a quick note of that?" Offer email only if they would rather, or a text cannot go. Only if they say yes to email, call email_summary.
 - If an order has been matched this call (lookup_caller_orders or lookup_order) and its orders carry one email address, that address is used automatically: do not ask for one and never read it out.
 - If the orders carry two or more different email addresses (the lookup gives emailsOnFile, and the email tools tell you too), you must ask which to use. Read each address out as an address, naturally, saying the name part and the domain as words ("chris at deskwell dot co dot uk"), and do NOT spell them letter by letter. Then pass the one they choose, exactly as listed, in email (email_summary) or send_to (email_order_link). Never offer an address that is not in the list. Otherwise ask for their email address, ask them to say it slowly, read it back one character at a time and wait for them to confirm before you call the tool.
 - For a call with several items, name each one in the summary with its options and the quantity the caller wanted, for example "36 of the Prism mesh chair in black without a headrest". Quantities are fine in the summary; prices are not.
@@ -292,6 +329,90 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
     },
     required: ['reason'],
   },
+  build_basket: {
+    description:
+      "Put what the caller wants to buy into a basket they can open on any phone or computer and check out from. Pass EVERY line agreed so far each time (it replaces the last version): the exact variation id from matchingVariations in get_product, or the product id for a product with no options, and the quantity. Returns each line's name and options so you can confirm the list, or tells you which lines still need options choosing. Then offer to send it with send_text.",
+    properties: {
+      items: {
+        type: 'array',
+        description: 'Every line in the basket, with its id and quantity.',
+        items: {
+          type: 'object',
+          description: 'One line of the basket.',
+          properties: {
+            product_id: textProperty('The variation id from matchingVariations, or the product id for a product with no options.'),
+            quantity: { type: 'number', description: 'How many, as a whole number.' },
+          },
+          required: ['product_id', 'quantity'],
+        },
+      },
+    },
+    required: ['items'],
+  },
+  send_text: {
+    description:
+      "Text the caller, at the number they are calling from and nowhere else: the basket link (what 'basket'), their order page link (what 'order_link', only after an order is matched this call), or a short note of what you discussed with links to up to three products (what 'summary'). Says if the number cannot take texts, so you can offer email instead.",
+    properties: {
+      what: { type: 'string', enum: ['basket', 'order_link', 'summary'], description: "basket, order_link or summary." },
+      note: textProperty('For summary: two or three plain sentences of what was discussed. No prices, no order details, no web addresses. For basket: optional, one sentence to go above the link.'),
+      product_ids: {
+        type: 'array',
+        description: 'For summary: up to three product or variation ids to link.',
+        items: textProperty('One product or variation id, exactly as the tools returned it.'),
+      },
+      order_number: textProperty('For order_link, only when more than one order was matched and the caller means a particular one.'),
+    },
+    required: ['what'],
+  },
+  get_caller_history: {
+    description:
+      "What this caller has said to the shop before: earlier calls, live chats, emails, texts and voicemails, matched on the number they are ringing from (and the email on any order verified this call), newest first, with what each was about and whether it is still open; plus any return or damage request still open on a verified order. Use when the caller refers to an earlier conversation.",
+    properties: {},
+    required: [],
+  },
+  search_pages: {
+    description:
+      "Search the shop's own published pages (returns and cancellations, delivery and installation, terms and conditions, about us, contact) for the passages that answer a question. Returns up to three passages with the page and section they come from. Use for how-it-works questions get_faqs does not answer, such as where to report damage or what the returns window is.",
+    properties: {
+      query: textProperty("The caller's question in a few plain words, for example 'report damage photos' or 'return unwanted chair'."),
+    },
+    required: ['query'],
+  },
+  check_delivery_postcode: {
+    description:
+      "Whether the shop delivers to a postcode (the same rule the checkout applies, including places it does not deliver to), and with a product or variation id, the delivery services, prices and dates for that product. Use for 'do you deliver to...' and 'could it be here by Friday?'.",
+    properties: {
+      postcode: textProperty('The postcode as the caller said it. The first half alone (for example IV2) is enough.'),
+      product_id: textProperty('Optional. The product, or better the exact variation id, they are asking about.'),
+    },
+    required: ['postcode'],
+  },
+  get_reviews: {
+    description:
+      "Published customer reviews of a product (and its variations): how many, the average rating, and up to four short quotes, the ones that best match the caller's question first. Use for 'is it comfortable?', 'do people like it?', 'is it easy to put together?'.",
+    properties: {
+      product_id: textProperty('The id from search_products or find_by_sku.'),
+      query: textProperty("Optional. What the caller wants to know, in a few words, such as 'comfortable long day' or 'assembly'."),
+    },
+    required: ['product_id'],
+  },
+  search_guides: {
+    description:
+      "Search the shop's own articles and buying guides for advice on a question, such as 'chair for back pain', 'standing desk height' or 'mesh or fabric'. Returns up to three passages with the article they come from.",
+    properties: {
+      query: textProperty("The caller's question in a few plain words."),
+    },
+    required: ['query'],
+  },
+  note_unanswered: {
+    description:
+      "Record a question you could not answer from your tools, so the shop can add the answer. Call it every time you tell a caller you cannot see or do not know something. Nothing is said to the caller.",
+    properties: {
+      question: textProperty("What the caller wanted to know, in a few plain words, for example 'weight limit of the Prism chair'."),
+      topic: textProperty('Optional. One or two words: product, delivery, order, returns, payment, other.'),
+    },
+    required: ['question'],
+  },
 }
 
 /** An ElevenLabs webhook-tool definition that calls back into this site. */
@@ -370,10 +491,67 @@ export function buildAgentBody(input: AgentInputs): Record<string, unknown> {
   }
 }
 
-/** A fingerprint of everything pushed to ElevenLabs. The tools token is left out
- *  on purpose: it is random per setup and says nothing about what changed. */
-export function configHash(input: AgentInputs): string {
+function comparableInputs(input: AgentInputs): Partial<AgentInputs> {
   const comparable: Partial<AgentInputs> = { ...input }
   delete comparable.toolsToken
-  return createHash('sha256').update(JSON.stringify({ ...comparable, revision: AGENT_CONFIG_REVISION })).digest('hex').slice(0, 32)
+  return comparable
+}
+
+function sha(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 32)
+}
+
+/** Stands in for a real site when fingerprinting the code, so the fingerprint
+ *  moves with the wording and the tool definitions and with nothing else. */
+const FINGERPRINT_INPUTS: AgentInputs = {
+  businessName: 'Business',
+  siteUrl: 'https://example.test',
+  greeting: '',
+  extraInstructions: 'Owner text',
+  voiceId: 'voice',
+  ttsModel: 'model',
+  llm: 'llm',
+  language: 'en',
+  maxCallMinutes: 15,
+  toolsToken: 'token',
+  toolIds: {},
+  postCallWebhookId: 'webhook',
+}
+
+/** What this version of the module would push for any site: the instructions,
+ *  the agent's shape and every tool definition. A release that changes any of
+ *  them changes this, with no revision number to remember to bump. */
+export function codeFingerprint(): string {
+  const tools = TOOL_NAMES.map((name) => buildToolConfig(name, FINGERPRINT_INPUTS.siteUrl, FINGERPRINT_INPUTS.toolsToken))
+  return sha(JSON.stringify({ body: buildAgentBody(FINGERPRINT_INPUTS), tools, revision: AGENT_CONFIG_REVISION }))
+}
+
+/** A fingerprint of everything pushed to ElevenLabs, in two halves: what the
+ *  owner chose, then what the code made of it. The halves let the hourly job
+ *  tell "the module was updated" (safe to push unattended) from "somebody
+ *  changed a setting and has not pressed the button" (theirs to push). The tools
+ *  token is left out on purpose: it is random per setup and says nothing about
+ *  what changed. */
+export function configHash(input: AgentInputs): string {
+  return `${sha(JSON.stringify(comparableInputs(input)))}.${codeFingerprint()}`
+}
+
+/** The single hash older versions stored, which folded a revision number in. */
+function legacyConfigHash(input: AgentInputs, revision: number): string {
+  return sha(JSON.stringify({ ...comparableInputs(input), revision }))
+}
+
+/** True when what ElevenLabs holds differs from these inputs ONLY because the
+ *  module's own code moved on since it was set up: every setting is as it was
+ *  when the button was last pressed. */
+export function onlyCodeChanged(input: AgentInputs, syncedHash: string): boolean {
+  if (!syncedHash || syncedHash === configHash(input)) return false
+  const dot = syncedHash.indexOf('.')
+  if (dot > 0) return syncedHash.slice(0, dot) === configHash(input).split('.')[0]
+  // Set up by a version from before the split: it matches one of the old
+  // revisions exactly if no setting has changed since.
+  for (let revision = 1; revision < AGENT_CONFIG_REVISION; revision++) {
+    if (legacyConfigHash(input, revision) === syncedHash) return true
+  }
+  return false
 }

@@ -1,5 +1,6 @@
 import type { CallRecord } from './calls'
 import { callerLabel } from './calls'
+import { describeToolCall } from './tool-log'
 
 // The written overview of a call: what the unified inbox shows at the top of a
 // call's conversation and what the settings screen shows when a call is opened.
@@ -42,9 +43,21 @@ export function buildOverview(call: CallRecord): string {
   return lines.join('\n')
 }
 
+/** The transcript with each lookup slotted in where it happened, so a reader
+ *  can see what the assistant had in front of it when it answered. A lookup
+ *  goes before the first line spoken after it; one with no time goes last. */
 export function buildTranscriptText(call: CallRecord): string {
-  if (call.transcript.length === 0) return 'No transcript was recorded.'
-  return call.transcript
-    .map((turn) => `${turn.role === 'caller' ? 'Caller' : 'Assistant'}: ${turn.text}`)
-    .join('\n')
+  const log = call.toolLog ?? []
+  if (call.transcript.length === 0 && log.length === 0) return 'No transcript was recorded.'
+  const lines: string[] = []
+  let next = 0
+  for (const turn of call.transcript) {
+    while (next < log.length && log[next]!.at !== null && turn.at !== null && log[next]!.at! <= turn.at) {
+      lines.push(describeToolCall(log[next]!))
+      next++
+    }
+    lines.push(`${turn.role === 'caller' ? 'Caller' : 'Assistant'}: ${turn.text}`)
+  }
+  for (; next < log.length; next++) lines.push(describeToolCall(log[next]!))
+  return lines.join('\n')
 }

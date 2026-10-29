@@ -19,6 +19,12 @@ import { lookupFaqs } from './faq-queries'
 import { paymentInfo } from './payment-queries'
 import { findBySku, getProductDetail, listTopCategories, searchProducts } from './product-queries'
 import { isPlausibleEmail } from './text'
+import { callerHistory } from './caller-history'
+import { MAX_BASKET_LINES } from './phone-basket'
+import { deliveryToPostcode } from './postcode-delivery'
+import { productReviews, searchGuides, searchPages } from './site-content'
+import { buildBasket, sendText } from './text-tools'
+import { recordUnanswered } from './unanswered'
 import type { ToolName } from './agent-config'
 
 // ---------------------------------------------------------------------------
@@ -80,6 +86,34 @@ const CallbackInput = CallIdentity.extend({
   email: z.string().trim().max(320).optional(),
   phone: z.string().trim().max(40).optional(),
   reason: z.string().trim().min(1).max(1000),
+})
+
+const BasketInput = CallIdentity.extend({
+  items: z.array(z.object({
+    product_id: z.string().trim().min(1).max(100),
+    quantity: z.number().positive().max(100_000),
+  })).min(1).max(MAX_BASKET_LINES),
+})
+const TextInput = CallIdentity.extend({
+  what: z.enum(['basket', 'order_link', 'summary']),
+  note: z.string().trim().max(1000).optional(),
+  product_ids: z.array(z.string().trim().min(1).max(100)).max(6).optional(),
+  order_number: z.string().trim().max(60).optional(),
+})
+const QueryInput = CallIdentity.extend({
+  query: z.string().trim().min(1).max(200),
+})
+const PostcodeInput = CallIdentity.extend({
+  postcode: z.string().trim().min(2).max(20),
+  product_id: z.string().trim().max(100).optional(),
+})
+const ReviewsInput = CallIdentity.extend({
+  product_id: z.string().trim().min(1).max(100),
+  query: z.string().trim().max(200).optional(),
+})
+const UnansweredInput = CallIdentity.extend({
+  question: z.string().trim().min(1).max(300),
+  topic: z.string().trim().max(60).optional(),
 })
 
 export type ToolResult = Record<string, unknown>
@@ -334,6 +368,90 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const input = CallbackInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       return runSaveCallback(input.data)
+    }
+    case 'build_basket': {
+      const input = BasketInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const call = await resolveCall(input.data)
+      if (!call) return { result: { ok: false, message: 'Baskets only work on a live phone call.' }, callbackSaved: null }
+      return { result: await buildBasket(call, input.data.items), callbackSaved: null }
+    }
+    case 'send_text': {
+      const input = TextInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const call = await resolveCall(input.data)
+      if (!call) return { result: { ok: false, message: 'Texts only work on a live phone call. Offer to email it instead.' }, callbackSaved: null }
+      const result = await sendText(call, {
+        what: input.data.what,
+        note: blankToNull(input.data.note),
+        productIds: input.data.product_ids ?? [],
+        orderNumber: blankToNull(input.data.order_number),
+      })
+      return { result, callbackSaved: null }
+    }
+    case 'get_caller_history': {
+      const input = NoInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const call = await resolveCall(input.data)
+      if (!call) return { result: { ok: false, message: 'History only works on a live phone call.' }, callbackSaved: null }
+      const history = await callerHistory(call)
+      const empty = history.items.length === 0 && history.openRequests.length === 0
+      return {
+        result: {
+          ok: true,
+          ...history,
+          note: empty
+            ? 'Nothing earlier is linked to this number. Do not tell the caller that; ask them what it was about, and if it was about an order, check the order as usual.'
+            : 'Use this to recognise what they mean. Do not read the list out, and do not promise anything somebody else may have said.',
+        },
+        callbackSaved: null,
+      }
+    }
+    case 'search_pages': {
+      const input = QueryInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const { passages, pages } = await searchPages(input.data.query)
+      return {
+        result: passages.length > 0
+          ? { ok: true, passages, note: 'Answer from these words only, briefly, and say which page it is on. If none of them answers the question, say you cannot see it and call note_unanswered.' }
+          : { ok: false, pages, message: 'Nothing on the shop\'s pages matches that. Try other words once, or say you cannot see it and call note_unanswered.' },
+        callbackSaved: null,
+      }
+    }
+    case 'check_delivery_postcode': {
+      const input = PostcodeInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      return { result: await deliveryToPostcode(input.data.postcode, blankToNull(input.data.product_id)), callbackSaved: null }
+    }
+    case 'get_reviews': {
+      const input = ReviewsInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const digest = await productReviews(input.data.product_id, blankToNull(input.data.query))
+      if (!digest) return { result: { ok: false, message: 'This shop does not collect reviews. Say so if asked, and offer what the product page says instead.' }, callbackSaved: null }
+      return {
+        result: digest.count === 0
+          ? { ok: true, count: 0, message: 'Nobody has reviewed this one yet. Say so plainly; do not offer an opinion of your own.' }
+          : { ok: true, ...digest, note: 'Say how many reviews and the average out of five, then paraphrase one or two that answer the question. Never invent or exaggerate.' },
+        callbackSaved: null,
+      }
+    }
+    case 'search_guides': {
+      const input = QueryInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const passages = await searchGuides(input.data.query)
+      return {
+        result: passages.length > 0
+          ? { ok: true, passages, note: 'Give the gist in a sentence or two, as the shop\'s own advice ("our guide on mesh chairs says..."). Do not read it out at length.' }
+          : { ok: false, message: 'The shop has no article on that. Answer from the products instead, or say you cannot see it.' },
+        callbackSaved: null,
+      }
+    }
+    case 'note_unanswered': {
+      const input = UnansweredInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const call = await resolveCall(input.data)
+      if (call) await recordUnanswered(call.id, input.data.question, 'tool', input.data.topic ?? '')
+      return { result: { ok: true, message: 'Noted. Say nothing about it to the caller.' }, callbackSaved: null }
     }
   }
 }

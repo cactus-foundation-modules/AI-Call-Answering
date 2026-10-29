@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/prisma'
+import { parseToolLog, type ToolLogEntry } from './tool-log'
 
 // The record of each call the assistant took. One row per Twilio call, opened
 // when the call is handed over and completed when ElevenLabs delivers the
@@ -37,6 +38,8 @@ export type CallRecord = {
   /** Emails the assistant has sent the caller on this call, and the last address. */
   emailsSent: number
   emailedTo: string
+  /** What the assistant looked up, in order. */
+  toolLog: ToolLogEntry[]
   updatedAt: Date
 }
 
@@ -46,7 +49,7 @@ const COLUMNS = `
   id, call_sid, conversation_id, from_number, to_number, status, started_at, duration_seconds,
   summary, transcript, caller_name, caller_email, caller_phone, callback_needed, callback_reason,
   handled_at, read_at, verified_orders, verified_contact_name, verified_contact_email,
-  verified_contact_phone, failed_order_checks, emails_sent, emailed_to, updated_at
+  verified_contact_phone, failed_order_checks, emails_sent, emailed_to, tool_log, updated_at
 `
 
 function parseTranscript(value: unknown): TranscriptTurn[] {
@@ -89,6 +92,7 @@ export function mapCall(row: Record<string, unknown>): CallRecord {
     failedOrderChecks: Number(row.failed_order_checks),
     emailsSent: Number(row.emails_sent ?? 0),
     emailedTo: (row.emailed_to as string | null) ?? '',
+    toolLog: parseToolLog(row.tool_log),
     updatedAt: row.updated_at as Date,
   }
 }
@@ -248,6 +252,17 @@ export async function createCompletedCall(input: {
 }): Promise<CallRecord | null> {
   await openCall(input)
   return findCall({ callSid: input.callSid })
+}
+
+/** Whether a call may still be live. A row stays in_progress if its transcript
+ *  never arrived, so only calls young enough to still be running count. */
+export async function callInProgress(maxCallMinutes: number): Promise<boolean> {
+  const minutes = Math.max(1, Math.round(maxCallMinutes)) + 2
+  const rows = await prisma.$queryRaw<Array<{ n: number | bigint }>>`
+    SELECT COUNT(*) AS n FROM "acall_calls"
+    WHERE "status" = 'in_progress' AND "started_at" > CURRENT_TIMESTAMP - make_interval(mins => ${minutes}::int)
+  `
+  return Number(rows[0]?.n ?? 0) > 0
 }
 
 export async function setHandled(callId: string, handled: boolean): Promise<void> {
