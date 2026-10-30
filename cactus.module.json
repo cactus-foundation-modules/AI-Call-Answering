@@ -1,13 +1,13 @@
 {
   "name": "ai-call-answering",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "tablePrefix": "acall_",
   "notificationKinds": [
     {"id": "callback", "label": "Callback requests from the phone assistant", "description": "The phone assistant could not help a caller and took their name and email so somebody can get back to them.", "dedupePrefix": "ai-call-answering:callback:"},
     {"id": "unanswered", "label": "Weekly list of questions the phone assistant could not answer", "description": "Each Monday, how many caller questions last week the assistant had no answer for: the FAQs, pages or tools worth adding next.", "dedupePrefix": "ai-call-answering:unanswered:"}
   ],
   "description": "A voice assistant that answers your phone. It speaks with the latest ElevenLabs voices, answers questions about your products, suggests things from the shop, checks on orders once the caller has proved who they are, and takes a name and email for anything it cannot help with. Every call lands in the unified inbox with a written overview.",
-  "requiresCoreVersion": "0.5.1852",
+  "requiresCoreVersion": "0.5.1908",
   "requiresModules": [
     {"name": "twilio", "minVersion": "0.1.51"},
     {"name": "shop", "minVersion": "0.1.518"},

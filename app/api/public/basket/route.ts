@@ -4,6 +4,7 @@ import { getGuestCart, saveGuestCart, GUEST_CART_MAX_LINES } from '@/modules/sho
 import { getMemberCart, saveMemberCart, MEMBER_CART_MAX_LINES } from '@/modules/shop/lib/db/member-cart'
 import { mintGuestCartId, readGuestCartId, setGuestCartCookie } from '@/modules/shop/lib/guest-cart-cookie'
 import { openBasketByToken, type BasketLine } from '@/modules/ai-call-answering/lib/phone-basket'
+import { publicUrl } from '@/lib/security/public-origin'
 
 // GET /api/m/ai-call-answering/public/basket?t=<token>
 //
@@ -30,7 +31,7 @@ function merge(fromCall: BasketLine[], current: Array<BasketLine & Record<string
 
 export async function GET(request: NextRequest) {
   const token = (new URL(request.url).searchParams.get('t') ?? '').trim().slice(0, 100)
-  const response = NextResponse.redirect(new URL(BASKET_PATH, request.url), 303)
+  const response = NextResponse.redirect(publicUrl(request, BASKET_PATH), 303)
   // Never cached: the redirect carries a Set-Cookie naming one shopper's basket.
   response.headers.set('Cache-Control', 'no-store')
 
