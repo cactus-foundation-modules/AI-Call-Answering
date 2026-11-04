@@ -17,6 +17,7 @@ import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { describeForecast, loadDeliveryForecast, type SpokenDeliveryService } from './delivery-forecast'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
+import { expandSearchWords, textHasWord, type Vocabulary } from './spelling'
 import { normaliseSpokenSku, skuMatch, skuSearchDigits, type SkuMatch } from './sku'
 import type { ProductRef } from '@/modules/unified-inbox/lib/products'
 
@@ -129,27 +130,57 @@ function toSummary(row: ProductRow, symbol: string, spread: VariationSpread | nu
   }
 }
 
-/** One token matched anywhere a shopper would expect it to be. */
-function tokenMatches(token: string): Prisma.Sql {
-  const like = `%${escapeLike(token)}%`
-  return Prisma.sql`(p."name" ILIKE ${like} OR p."sku" ILIKE ${like} OR p."short_description" ILIKE ${like}
-    OR p."description" ILIKE ${like} OR c."name" ILIKE ${like})`
+/** One word, under any of its spellings, matched anywhere a shopper would expect it to be. */
+function tokenMatches(variants: string[]): Prisma.Sql {
+  const each = variants.map((variant) => {
+    const like = `%${escapeLike(variant)}%`
+    return Prisma.sql`(p."name" ILIKE ${like} OR p."sku" ILIKE ${like} OR p."short_description" ILIKE ${like}
+      OR p."description" ILIKE ${like} OR c."name" ILIKE ${like})`
+  })
+  return Prisma.sql`(${Prisma.join(each, ' OR ')})`
 }
 
 /** Favours a word in the name, then in the category, then the blurb. */
-function tokenScore(token: string): Prisma.Sql {
-  const like = `%${escapeLike(token)}%`
-  // COALESCE: a product with no category or no blurb compares as NULL, and one
-  // NULL would blank the whole sum and with it the ranking.
-  return Prisma.sql`(COALESCE(p."name" ILIKE ${like}, false)::int * 4
-    + COALESCE(c."name" ILIKE ${like}, false)::int * 2
-    + COALESCE(p."short_description" ILIKE ${like}, false)::int)`
+function tokenScore(variants: string[]): Prisma.Sql {
+  const each = variants.map((variant) => {
+    const like = `%${escapeLike(variant)}%`
+    // COALESCE: a product with no category or no blurb compares as NULL, and one
+    // NULL would blank the whole sum and with it the ranking.
+    return Prisma.sql`(COALESCE(p."name" ILIKE ${like}, false)::int * 4
+      + COALESCE(c."name" ILIKE ${like}, false)::int * 2
+      + COALESCE(p."short_description" ILIKE ${like}, false)::int)`
+  })
+  return Prisma.sql`GREATEST(${Prisma.join(each, ', ')})`
 }
 
-async function runSearch(tokens: string[], maxPrice: number | null, requireAll: boolean): Promise<ProductRow[]> {
-  const matches = tokens.map(tokenMatches)
+const VOCABULARY_TTL_MS = 10 * 60 * 1000
+const VOCABULARY_MAX_WORDS = 30000
+let vocabularyCache: { words: Vocabulary; at: number } | null = null
+
+/** The words the shop's own product names and categories use, so a word the
+ *  caller said slightly differently can be matched to the one the shop wrote.
+ *  Read once and kept for a few minutes: it is a scan of names, not of pages. */
+async function loadVocabulary(): Promise<Vocabulary> {
+  if (vocabularyCache && Date.now() - vocabularyCache.at < VOCABULARY_TTL_MS) return vocabularyCache.words
+  const rows = await prisma.$queryRaw<Array<{ word: string }>>(Prisma.sql`
+    SELECT DISTINCT lower(w) AS word
+    FROM (
+      SELECT regexp_split_to_table(p."name" || ' ' || COALESCE(c."name", ''), '[^A-Za-z0-9]+') AS w
+      FROM "shp_products" p LEFT JOIN "shp_categories" c ON c."id" = p."master_category_id"
+      WHERE ${VISIBLE}
+    ) words
+    WHERE length(w) >= 3
+    LIMIT ${VOCABULARY_MAX_WORDS}
+  `)
+  const words = new Set(rows.map((row) => row.word))
+  vocabularyCache = { words, at: Date.now() }
+  return words
+}
+
+async function runSearch(words: string[][], maxPrice: number | null, requireAll: boolean): Promise<ProductRow[]> {
+  const matches = words.map(tokenMatches)
   const where = requireAll ? Prisma.join(matches, ' AND ') : Prisma.join(matches, ' OR ')
-  const score = Prisma.join(tokens.map(tokenScore), ' + ')
+  const score = Prisma.join(words.map(tokenScore), ' + ')
   const priceCap = maxPrice === null
     ? Prisma.empty
     : Prisma.sql`AND COALESCE(NULLIF(p."sale_price", 0), p."price") <= ${maxPrice}`
@@ -172,17 +203,20 @@ export async function searchProducts(query: string, maxPrice: number | null): Pr
   if (tokens.length === 0) return { products: [], note: 'Nothing to search for. Ask the caller what they are looking for.' }
   const config = await getShopConfigCached()
 
-  let rows = await runSearch(tokens, maxPrice, true)
+  // Widen each word to its other spellings (light/lite, colour/color) before
+  // searching, so a different spelling never reads as "the shop has none".
+  const words = expandSearchWords(tokens, await loadVocabulary().catch(() => null))
+  let rows = await runSearch(words, maxPrice, true)
   let loosened = false
-  if (rows.length === 0 && tokens.length > 1) {
-    rows = await runSearch(tokens, maxPrice, false)
+  if (rows.length === 0 && words.length > 1) {
+    rows = await runSearch(words, maxPrice, false)
     loosened = rows.length > 0
   }
   const spreads = await variationSpreads(rows.map((row) => row.id))
   const products = rows.map((row) => toSummary(row, config.currencySymbol, spreads.get(row.id) ?? null))
   const basis = priceBasis(config.taxMode)
   if (products.length === 0) {
-    return { products, note: 'No matching products. Try fewer or different words, or list the categories.' }
+    return { products, note: 'No matching products, even allowing for other spellings. Try fewer or different words, or list the categories.' }
   }
   const ranged = products.some((product) => product.hasVariations)
   return {
@@ -328,9 +362,10 @@ async function findVariations(
     ORDER BY sv."position", child."name"
     LIMIT 1000
   `
+  const words = expandSearchWords(tokens, null)
   const fits = rows.filter((row) => {
-    const haystack = `${row.options ?? ''} ${row.name}`.toLowerCase()
-    return tokens.every((token) => haystack.includes(token))
+    const haystack = `${row.options ?? ''} ${row.name}`
+    return words.every((variants) => textHasWord(haystack, variants))
   })
   const matches = fits.slice(0, MAX_MATCHING_VARIATIONS).map((row): VariationMatch => {
     const { now, was } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
@@ -621,7 +656,7 @@ export async function findBySku(spoken: string): Promise<{ hits: SkuHit[]; note:
   })
 
   if (hits.length === 0) {
-    return { hits, note: 'No product has that code. Ask the caller to read it once more, or to describe the item (type, colour, name on the product page). Never tell them codes cannot be searched.' }
+    return { hits, note: 'No product has that code. Ask the caller to read it once more, or to describe the item (type, colour, name). Never tell them codes cannot be searched, never say where a code can be found, and never ask for an order confirmation or receipt: customers are not shown codes.' }
   }
   const close = hits.some((hit) => hit.match === 'close')
   return {
