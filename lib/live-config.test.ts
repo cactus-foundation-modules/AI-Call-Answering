@@ -67,7 +67,7 @@ describe('GPT-Live accept body', () => {
 
   it('gives the backend the same rule book as the ElevenLabs assistant', () => {
     const backend = buildBackendInstructions(inputs)
-    expect(backend).toContain(buildPrompt(inputs))
+    expect(backend).toContain(buildPrompt(inputs, { typingSounds: false }))
     expect(backend).toContain('Open nine till five.')
   })
 
@@ -93,6 +93,17 @@ describe('GPT-Live accept body', () => {
     expect(voice).toContain('<|SpawnThinking|>')
     expect(voice).toContain('Delegation policy:')
     expect(voice).toContain('British')
+  })
+
+  it('never promises a typing sound GPT-Live does not play', () => {
+    const voice = buildVoiceInstructions(inputs)
+    expect(voice).toContain('no sound on the line while the backend works')
+    expect(buildBackendInstructions(inputs)).not.toContain('typing')
+  })
+
+  it('keeps every order but the one asked about out of the conversation', () => {
+    expect(buildVoiceInstructions(inputs)).toContain('the backend only ever reports the one order the caller asked about')
+    expect(buildBackendInstructions(inputs)).toContain('Never mention or hint at an order the caller did not ask about')
   })
 })
 

@@ -20,6 +20,7 @@ import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { parseConsignmentParcels } from '@/modules/shop/lib/consignment-parcels-schema'
 import { describeDeliveryMoment, describeParcels, describePlaced, summariseParcels, type ParcelFacts } from './delivery-words'
 import type { VerifiedContact } from './calls'
+import { pickOrderOnNumber } from './caller-orders'
 import { normaliseCompany, normaliseOrderNumber, normalisePostcode, phoneMatchKey, postcodeMatchKey, splitOrderNumber } from './text'
 import {
   chargeStatusWords,
@@ -50,6 +51,8 @@ const MAX_ORDERS_RETURNED = 3
 /** Orders read for a caller recognised by their number: enough to cover "the one
  *  from January" without turning the answer into a customer history. */
 const MAX_CALLER_ORDERS = 5
+/** How far back a named order number is looked for on the caller's number. */
+const MAX_CALLER_ORDERS_SEARCHED = 200
 
 type CandidateRow = {
   id: string
@@ -322,21 +325,27 @@ export async function lookupOrders(claim: OrderClaim): Promise<OrderLookupOutcom
  *  narrow: the number must be a real one (not withheld), and a match is on the
  *  order's own contact number. Caller ID can be faked, so what comes back is the
  *  same trimmed view as any verified lookup: progress and town, never the
- *  customer record. */
-export async function lookupOrdersByCallerNumber(fromNumber: string): Promise<OrderLookupOutcome> {
+ *  customer record.
+ *
+ *  With an order number, ONLY that order comes back, or nothing when it is not
+ *  on this number: a caller who named one order must never be read another
+ *  (a shared or recycled number carries somebody else's history). Every order
+ *  on the number is searched for it, not just the newest few. */
+export async function lookupOrdersByCallerNumber(fromNumber: string, orderNumber: string | null = null): Promise<OrderLookupOutcome> {
   const key = phoneMatchKey(fromNumber)
   if (!key) return { matched: false }
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT o."id" FROM "shp_orders" o
+  const rows = await prisma.$queryRaw<Array<{ id: string; order_number: string }>>(Prisma.sql`
+    SELECT o."id", o."order_number" FROM "shp_orders" o
     WHERE o."kind" = 'SALE'
       AND (
         right(regexp_replace(coalesce(o."customer_phone", ''), '[^0-9]', '', 'g'), 10) = ${key}
         OR right(regexp_replace(coalesce(o."notify_phone", ''), '[^0-9]', '', 'g'), 10) = ${key}
       )
-    ORDER BY o."created_at" DESC LIMIT ${MAX_CALLER_ORDERS}
+    ORDER BY o."created_at" DESC LIMIT ${orderNumber ? MAX_CALLER_ORDERS_SEARCHED : MAX_CALLER_ORDERS}
   `)
-  if (rows.length === 0) return { matched: false }
-  return readOrders(rows.map((row) => row.id))
+  const ids = orderNumber ? pickOrderOnNumber(rows, orderNumber) : rows.map((row) => row.id)
+  if (ids.length === 0) return { matched: false }
+  return readOrders(ids)
 }
 
 function money(value: unknown, order: OrderRow, symbol: string): string {

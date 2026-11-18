@@ -46,6 +46,36 @@ describe('buildPrompt', () => {
   })
 })
 
+describe('buildPrompt orders', () => {
+  it('looks up only the order the caller named, and never volunteers others on the number', () => {
+    const prompt = buildPrompt(inputs)
+    expect(prompt).toContain('call lookup_caller_orders with that order_number')
+    expect(prompt).toContain('ask for the order number first')
+    expect(prompt).toContain('Never mention, list or hint at any other order on their number')
+    expect(prompt).not.toContain('Do not ask for an order number, postcode, email or company name first')
+    expect(prompt).not.toContain('say what the latest one is')
+  })
+  it('lets lookup_caller_orders take the number the caller gave', () => {
+    const tool = buildToolConfig('lookup_caller_orders', inputs.siteUrl, 'x') as {
+      description: string
+      api_schema: { request_body_schema: { properties: Record<string, unknown>; required: string[] } }
+    }
+    expect(tool.api_schema.request_body_schema.properties.order_number).toBeTruthy()
+    expect(tool.api_schema.request_body_schema.required).not.toContain('order_number')
+    expect(tool.description).toContain('ONLY that order')
+    expect(tool.description).not.toContain('BEFORE asking for any order number')
+  })
+})
+
+describe('buildPrompt wait sounds', () => {
+  it('promises typing only to the engine that plays it', () => {
+    expect(buildPrompt(inputs)).toContain('typing sounds')
+    const silent = buildPrompt(inputs, { typingSounds: false })
+    expect(silent).not.toContain('typing')
+    expect(silent).toContain('hears nothing while a lookup runs')
+  })
+})
+
 describe('buildPrompt voice', () => {
   it('asks for a human voice and varied lead-ins', () => {
     const prompt = buildPrompt(inputs)

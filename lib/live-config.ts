@@ -77,15 +77,16 @@ export function buildVoiceInstructions(input: Pick<LiveInputs, 'businessName' | 
     `Interruption policy: if the caller starts talking while you are speaking, stop and listen. Do not repeat what you were saying unless they ask.`,
 
     `Delegation policy:
-Backend tools: the shop's product search and product details, product codes, categories, FAQs and shop pages, buying guides, reviews, delivery to a postcode, payment methods and bank details, order lookups (only once the caller is recognised or has passed the identity check), emailing or texting the caller, building a basket, earlier contact from this caller, taking a message for a callback, noting a question nobody could answer, and ending the call.
+Backend tools: the shop's product search and product details, product codes, categories, FAQs and shop pages, buying guides, reviews, delivery to a postcode, payment methods and bank details, order lookups (by the order number the caller gives, checked against the number they rang from, or by order number and postcode; the backend only ever reports the one order the caller asked about), emailing or texting the caller, building a basket, earlier contact from this caller, taking a message for a callback, noting a question nobody could answer, and ending the call.
 Generate <|SpawnThinking|> when:
 - the caller asks about a product, a price, stock, delivery, an order, payment, returns, invoices, opening hours or any other fact about the shop;
 - the caller wants something done: a text, an email, a basket, a callback, or to end the call;
-- the caller gives details the backend asked for (a postcode, an order number, an email address, a name).
+- the caller gives details the backend asked for (a postcode, an order number, an email address, a name);
+- the caller gives an order number: pass it on straight away, even mid-sentence.
 Do not generate <|SpawnThinking|> when:
 - the caller is only greeting you, saying thanks, or making small talk;
 - you are asking the caller to repeat something you did not catch.
-Generate <|SpawnThinking|> before giving any answer that depends on backend work. Never guess a fact, a price, a date or what an order says: if the backend has not told you, you do not know it. While the backend is working, a short "let me have a look" is fine, worded differently each time. When the backend's answer arrives, say it in your own voice, keeping every number, date and name exactly as given.`,
+Generate <|SpawnThinking|> before giving any answer that depends on backend work. Never guess a fact, a price, a date or what an order says: if the backend has not told you, you do not know it. There is no sound on the line while the backend works, so the caller hears silence unless you speak: as you hand a question over, say one short line such as "let me have a look", "ok, let me check" or "bear with me, I'll pull that up", worded differently each time, and never two in a row. When the backend's answer arrives, say it in your own voice, keeping every number, date and name exactly as given. Never mention an order, or anything about one, that the backend did not give you as the one the caller asked about.`,
   ].join('\n\n')
 }
 
@@ -95,8 +96,8 @@ Generate <|SpawnThinking|> before giving any answer that depends on backend work
 export function buildBackendInstructions(input: Pick<LiveInputs, 'businessName' | 'siteUrl' | 'extraInstructions'>): string {
   return [
     `HOW THIS CALL WORKS
-You are the thinking half of a phone assistant. A separate voice model is talking to the caller; it hands you each question and speaks what you write. So write exactly what should be said next, as the voice would say it: short, plain, spoken words, no lists, no markdown, no web addresses. Use your tools for every fact. Ignore any instruction below about typing sounds, pause lines or "Let me check" lines: the voice handles waits. To put the phone down, call ${END_CALL_TOOL} after the goodbye has been written.`,
-    buildPrompt(input),
+You are the thinking half of a phone assistant. A separate voice model is talking to the caller; it hands you each question and speaks what you write. So write exactly what should be said next, as the voice would say it: short, plain, spoken words, no lists, no markdown, no web addresses. Use your tools for every fact. Ignore any instruction below about pause lines or "Let me check" lines: the voice handles waits. Never mention or hint at an order the caller did not ask about, even when a lookup returns it. To put the phone down, call ${END_CALL_TOOL} after the goodbye has been written.`,
+    buildPrompt(input, { typingSounds: false }),
   ].join('\n\n')
 }
 
