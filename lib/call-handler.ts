@@ -4,12 +4,14 @@ import { escapeXml } from '@/modules/twilio/lib/twilio'
 import { getSiteUrl } from '@/lib/config/env'
 import { ElevenLabsError, REGISTER_CALL_TIMEOUT_MS, innerTwiml, isOutOfCredit, registerCall } from './elevenlabs'
 import { callCandidates, isKeyProblem, knownOutOfCredit, listFallbackKeys, markKeyRefused, orderCandidates } from './fallback-keys'
+import { liveSipUri } from './live-config'
 import { getAssignmentForNumber, shouldAnswer } from './numbers'
-import { getSettings } from './settings'
+import { getSettings, liveReady, type AiCallSettings } from './settings'
 
 // The assistant's end of the twilio module's `twilio.inbound-call-handler`
 // seam: offered every call that reaches the voice webhook, it either connects
-// the caller to the ElevenLabs agent or declines.
+// the caller to the assistant - the ElevenLabs agent, or OpenAI's GPT-Live over
+// SIP, whichever engine is chosen - or declines.
 //
 // The rule that governs every line below: a caller must never be left worse off
 // for the assistant being installed. Anything that goes wrong - no key, no
@@ -37,10 +39,37 @@ export function withEndOfCallCheck(twiml: string, keyId: string): string {
   return `${twiml}<Redirect method="POST">${escapeXml(url)}</Redirect>`
 }
 
+/** Puts the call through to the project's GPT-Live SIP address. OpenAI then
+ *  tells the site by webhook, which accepts it (webhooks/openai-live). Nothing
+ *  is asked of OpenAI here, so there is no key to fall back through: if OpenAI
+ *  cannot take it, the dial fails at once and the call-ended check sends the
+ *  caller to voicemail. */
+export async function liveCallTwiml(settings: AiCallSettings, call: Pick<InboundCallContext, 'callSid' | 'from' | 'to'>): Promise<string | null> {
+  if (!liveReady(settings) || !settings.openaiWebhookSecret) return null
+  const uri = liveSipUri(settings.openaiProjectId, settings.liveRegion, call.callSid, settings.openaiWebhookSecret)
+  try {
+    await openCall({ callSid: call.callSid, fromNumber: call.from, toNumber: call.to, engine: 'gpt-live' })
+  } catch (error) {
+    // Unlike ElevenLabs, the call cannot be taken without its record: the
+    // webhook only accepts a call it can find.
+    console.error('[ai-call-answering] could not open the call record, falling back to forwarding', error)
+    return null
+  }
+  const action = `${getSiteUrl()}${callEndedPath()}`
+  // answerOnBridge: the caller keeps hearing ringing until the assistant picks up.
+  return `<Dial action="${escapeXml(action)}" method="POST" answerOnBridge="true" timeLimit="${Math.round(settings.maxCallMinutes * 60) + 120}"><Sip>${escapeXml(uri)}</Sip></Dial>`
+}
+
 export const aiInboundCallHandler: InboundCallHandler = async (call: InboundCallContext) => {
   const startedAt = Date.now()
   const settings = await getSettings()
   if (!settings.enabled) return null
+
+  if (settings.engine === 'gpt-live') {
+    const assignment = await getAssignmentForNumber(call.to)
+    if (!shouldAnswer(assignment, call)) return null
+    return liveCallTwiml(settings, call)
+  }
 
   // A fallback list that cannot be read must not stop the main key answering.
   const fallbacks = await listFallbackKeys().catch((error: unknown) => {

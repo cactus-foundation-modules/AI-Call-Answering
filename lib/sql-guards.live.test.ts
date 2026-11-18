@@ -70,6 +70,7 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
     process.env.DIRECT_URL = database.connectionUri
     process.env.ENCRYPTION_KEY = 'ab'.repeat(32)
     delete process.env.ELEVENLABS_API_KEY
+    delete process.env.OPENAI_API_KEY
 
     mod = {
       prisma: await import('@/lib/db/prisma'),
@@ -255,5 +256,47 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
     expect(again.status).toBe('filed')
     const count = await mod.prisma.prisma.$queryRawUnsafe<Array<{ n: bigint }>>("SELECT count(*) AS n FROM acall_calls WHERE call_sid = 'CA9'")
     expect(Number(count[0]?.n)).toBe(1)
+  })
+
+  it('round-trips the GPT-Live settings and refuses an unknown engine', async () => {
+    const before = await mod.settings.getSettings()
+    expect(before).toMatchObject({ engine: 'elevenlabs', openaiApiKey: null, openaiProjectId: '', liveVoice: 'marin', liveBackendModel: 'gpt-6-luna', liveRegion: 'global' })
+    expect(mod.settings.liveReady(before)).toBe(false)
+    await mod.settings.updateSettings({
+      engine: 'gpt-live', openaiApiKey: 'sk-proj-test', openaiProjectId: 'proj_abc123', openaiWebhookSecret: 'whsec_c2VjcmV0',
+      liveVoice: 'cedar', liveBackendModel: 'gpt-6-sol', liveRegion: 'eu',
+    })
+    const after = await mod.settings.getSettings()
+    expect(after).toMatchObject({ engine: 'gpt-live', openaiApiKey: 'sk-proj-test', openaiProjectId: 'proj_abc123', openaiWebhookSecret: 'whsec_c2VjcmV0', liveVoice: 'cedar', liveBackendModel: 'gpt-6-sol', liveRegion: 'eu' })
+    expect(mod.settings.liveReady(after)).toBe(true)
+    expect(mod.settings.engineReady(after)).toBe(true)
+    const stored = await mod.prisma.prisma.$queryRawUnsafe<Array<{ k: string | null }>>(`SELECT openai_api_key_encrypted AS k FROM acall_settings`)
+    expect(stored[0]?.k).not.toContain('sk-proj-test')
+    await mod.settings.updateSettings({ clearOpenaiApiKey: true })
+    expect((await mod.settings.getSettings()).openaiApiKey).toBeNull()
+    await expect(mod.prisma.prisma.$executeRawUnsafe(`UPDATE acall_settings SET engine = 'nonsense'`)).rejects.toThrow()
+    await mod.settings.updateSettings({ engine: 'elevenlabs' })
+  })
+
+  it('claims a GPT-Live call once, only for its own open call, and keeps its usage', async () => {
+    await mod.calls.openCall({ callSid: 'CALIVE', fromNumber: '+447700900777', toNumber: '+441234567890', engine: 'gpt-live' })
+    await mod.calls.openCall({ callSid: 'CAEL', fromNumber: '+447700900778', toNumber: '+441234567890' })
+    expect(await mod.calls.claimLiveCall('CAEL', 'live_x')).toBeNull()
+    expect(await mod.calls.claimLiveCall('CANONE', 'live_x')).toBeNull()
+    const claimed = await mod.calls.claimLiveCall('CALIVE', 'live_1')
+    expect(claimed).toMatchObject({ callSid: 'CALIVE', conversationId: 'live_1', status: 'in_progress' })
+    // A second session naming the same call, or a retried webhook, gets nothing.
+    expect(await mod.calls.claimLiveCall('CALIVE', 'live_2')).toBeNull()
+    expect((await mod.calls.findCall({ conversationId: 'live_1' }))?.callSid).toBe('CALIVE')
+
+    await mod.calls.recordUsage(claimed!.id, { seconds: 61, inputTokens: 12000, cachedTokens: 10800, outputTokens: 300, responses: 4 })
+    const usage = await mod.prisma.prisma.$queryRawUnsafe<Array<{ usage: unknown; engine: string; live_session_id: string }>>(
+      `SELECT usage, engine, live_session_id FROM acall_calls WHERE call_sid = 'CALIVE'`,
+    )
+    expect(usage[0]).toMatchObject({ engine: 'gpt-live', live_session_id: 'live_1', usage: { seconds: 61, cachedTokens: 10800 } })
+
+    await mod.calls.completeCall(claimed!.id, { conversationId: 'live_1', durationSeconds: 61, summary: 'Asked about chairs.', transcript: [], startedAt: null })
+    await mod.prisma.prisma.$executeRawUnsafe(`UPDATE acall_calls SET live_session_id = NULL WHERE call_sid = 'CALIVE'`)
+    expect(await mod.calls.claimLiveCall('CALIVE', 'live_3')).toBeNull()
   })
 })

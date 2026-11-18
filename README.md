@@ -4,11 +4,11 @@
 
 # AI Call Answering module
 
-A voice assistant that answers your phone. Built on the [Twilio module](https://github.com/cactus-foundation-modules/twilio) for the phone line and [ElevenLabs](https://elevenlabs.io) for the voice and the conversation.
+A voice assistant that answers your phone. Built on the [Twilio module](https://github.com/cactus-foundation-modules/twilio) for the phone line, with a choice of two voice engines: [ElevenLabs](https://elevenlabs.io) (the default) or OpenAI's GPT-Live 1.
 
 ## What it does
 
-- **Answers calls** on the numbers you choose, in a natural ElevenLabs voice (Eleven v4 by default).
+- **Answers calls** on the numbers you choose, in a natural ElevenLabs voice (Eleven v4 by default), or with OpenAI GPT-Live 1, which listens while it talks so a caller can interrupt the way they would a person.
 - **Answers questions about any product** in your shop: sizes, options, price, stock, specifications and your FAQs (product, category, collection and shop-wide).
 - **Suggests products** from the shop based on what the caller needs and what they want to spend.
 - **Handles order enquiries**, but only after checking who is calling. It needs the delivery postcode plus one of the order number, the email address or the company name. Wrong answers are limited per call and per number, and nothing like an email, phone number or street address is ever read out.
@@ -31,8 +31,9 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 ## Requirements
 
 - The **Twilio**, **Shop** and **Unified Inbox** modules.
-- An ElevenLabs account with an API key that can use Agents, Voices and Workspace webhooks.
-- `ENCRYPTION_KEY` set on the site (the key is stored encrypted). Optionally `ELEVENLABS_API_KEY` instead of pasting the key in.
+- For ElevenLabs: an ElevenLabs account with an API key that can use Agents, Voices and Workspace webhooks.
+- For GPT-Live: an OpenAI project with GPT-Live access, a project API key, and a webhook on that project. The site must run as a long-lived server (how Cactus sites are hosted): it keeps a connection to OpenAI open for the length of each call.
+- `ENCRYPTION_KEY` set on the site (keys are stored encrypted). Optionally `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` instead of pasting the keys in.
 
 ## Setting it up
 
@@ -40,6 +41,19 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 2. In the **Twilio** tab, make sure the number has call handling on (forwarding or voicemail). That is what points the number at your site.
 3. In **Phone numbers**, tick the numbers the assistant should answer, and choose whether it answers every call or only when the number is shut or nothing would ring.
 4. Switch the assistant **on**.
+
+### Using GPT-Live instead
+
+1. In **Assistant**, set **Voice engine** to OpenAI GPT-Live 1.
+2. Paste the OpenAI project key and the project ID (`proj_...`, under Settings > Project > General).
+3. In that OpenAI project, under Settings > Webhooks, add an endpoint at the address the tab shows (`/api/m/ai-call-answering/webhooks/openai-live`) for the `live.transport.incoming` event, and paste its signing secret (`whsec_...`) into the tab.
+4. Pick a voice and a thinking model, **Save changes**, and switch the assistant on. There is nothing to press at OpenAI: every call is given the current wording as it arrives.
+
+The voice model (`gpt-live-1`) holds the conversation and hands each question to the thinking model (GPT-6 Luna by default), which follows the same rules and uses the same tools as the ElevenLabs assistant. Twilio puts the call through to the project's SIP address with a signed reference to the call; the site checks the reference before accepting, so somebody who learns the address cannot borrow another caller's session. The site then keeps a "sideband" connection to the call, runs the tools over it, and files the transcript, an overview written by the thinking model, and what the call used.
+
+**Prompt caching.** GPT-Live offers no cache setting of its own, so the module makes the cache work for it: the thinking model's instructions and tool list are built only from the site's settings, never the caller or the time, and in a fixed order, so every lookup of every call starts with the same several thousand tokens. OpenAI then serves them from its cache at a fraction of the price. Each call records how much of its input came from the cache (`acall_calls.usage`), and the server log prints the share when the call is filed.
+
+If OpenAI cannot take the call, or the site cannot attach to it, the call drops within seconds and goes to the number's voicemail, as with ElevenLabs.
 
 ## How it fits together
 
@@ -52,6 +66,7 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 | `cron/unanswered` | Mondays: notification with the week's count of unanswered questions. |
 | `cron/resync` | Hourly: pushes a module update to ElevenLabs when only the code changed. Needs `CRON_SECRET`. |
 | `webhooks/post-call` | ElevenLabs delivers the transcript here after hang-up. Checked against its HMAC signature. |
+| `webhooks/openai-live` | GPT-Live only: OpenAI announces an incoming call here (Standard Webhooks signature). The site accepts it with the instructions and tools, then runs the call's tools over a sideband connection until it ends. |
 
 Calls from other agents in the same ElevenLabs workspace are ignored.
 
@@ -61,4 +76,4 @@ ElevenLabs credit runs out per account. Under **Settings > AI Call Answering > A
 
 ## Costs
 
-ElevenLabs charges by the minute for conversations and Twilio charges for the call. The longest-call setting stops a runaway conversation.
+ElevenLabs charges by the minute for conversations and Twilio charges for the call. GPT-Live is charged by OpenAI per second of call, plus the thinking model's tokens (most of them cached). The longest-call setting stops a runaway conversation.

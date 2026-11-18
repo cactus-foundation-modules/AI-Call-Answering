@@ -47,6 +47,72 @@ export const LANGUAGE_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
 
 export const MAX_CALL_MINUTES_LIMIT = 60
 
+// ---------------------------------------------------------------------------
+// GPT-Live, the second engine. OpenAI's own voice model answers the call and
+// hands the thinking and the lookups to a backend model (lib/live-config.ts).
+// ---------------------------------------------------------------------------
+
+export const ENGINES = ['elevenlabs', 'gpt-live'] as const
+export type Engine = (typeof ENGINES)[number]
+
+export function isEngine(value: unknown): value is Engine {
+  return typeof value === 'string' && (ENGINES as readonly string[]).includes(value)
+}
+
+export const ENGINE_CHOICES: ReadonlyArray<{ id: Engine; label: string }> = [
+  { id: 'elevenlabs', label: 'ElevenLabs - your choice of voice and thinking model (recommended)' },
+  { id: 'gpt-live', label: 'OpenAI GPT-Live 1 - listens while it talks, so callers can butt in naturally' },
+]
+
+/** `gpt-live-1` is the only voice model OpenAI lists. Kept in one place so a
+ *  1.1 is a one-line change. */
+export const LIVE_MODEL = 'gpt-live-1'
+
+export const DEFAULT_LIVE_VOICE = 'marin'
+
+/** Built-in GPT-Live voices, as the accept endpoint's reference lists them.
+ *  The box also takes any other name or a custom voice id. */
+export const LIVE_VOICE_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'marin', label: 'Marin (OpenAI default)' },
+  { id: 'cedar', label: 'Cedar' },
+  { id: 'stone', label: 'Stone' },
+  { id: 'meridian', label: 'Meridian' },
+  { id: 'quartz', label: 'Quartz' },
+  { id: 'ripple', label: 'Ripple' },
+  { id: 'vesper', label: 'Vesper' },
+  { id: 'willow', label: 'Willow' },
+  { id: 'gleam', label: 'Gleam' },
+  { id: 'bossa', label: 'Bossa' },
+  { id: 'tempo', label: 'Tempo' },
+  { id: 'beacon', label: 'Beacon' },
+  { id: 'delta', label: 'Delta' },
+  { id: 'cinder', label: 'Cinder' },
+  { id: 'sage', label: 'Sage' },
+  { id: 'pearl', label: 'Pearl' },
+]
+
+/** The backend model GPT-Live hands questions and lookups to. OpenAI suggests
+ *  starting with Luna and moving to Sol for harder work. */
+export const DEFAULT_LIVE_BACKEND_MODEL = 'gpt-6-luna'
+
+export const LIVE_BACKEND_MODEL_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna - quick, OpenAI\'s suggested start (recommended)' },
+  { id: 'gpt-6-sol', label: 'GPT-6 Sol - more careful with tricky questions, a little slower' },
+]
+
+export const LIVE_REGIONS = ['global', 'eu', 'in'] as const
+export type LiveRegion = (typeof LIVE_REGIONS)[number]
+
+export const LIVE_REGION_CHOICES: ReadonlyArray<{ id: LiveRegion; label: string }> = [
+  { id: 'global', label: 'Nearest to the caller' },
+  { id: 'eu', label: 'Europe only' },
+  { id: 'in', label: 'India only' },
+]
+
+function isLiveRegion(value: unknown): value is LiveRegion {
+  return typeof value === 'string' && (LIVE_REGIONS as readonly string[]).includes(value)
+}
+
 export type AiCallSettings = {
   enabled: boolean
   apiKey: string | null
@@ -67,6 +133,14 @@ export type AiCallSettings = {
   toolIds: Record<string, string>
   syncedHash: string
   syncedAt: Date | null
+  engine: Engine
+  openaiApiKey: string | null
+  openaiApiKeyFromEnv: boolean
+  openaiProjectId: string
+  openaiWebhookSecret: string | null
+  liveVoice: string
+  liveBackendModel: string
+  liveRegion: LiveRegion
 }
 
 type Row = Record<string, unknown>
@@ -88,6 +162,10 @@ export function envApiKey(): string | null {
   return str(process.env.ELEVENLABS_API_KEY)
 }
 
+export function envOpenAiKey(): string | null {
+  return str(process.env.OPENAI_API_KEY)
+}
+
 async function readRow(): Promise<Row | null> {
   const rows = await prisma.$queryRaw<Row[]>`SELECT * FROM "acall_settings" WHERE "id" = 'singleton' LIMIT 1`
   return rows[0] ?? null
@@ -96,6 +174,7 @@ async function readRow(): Promise<Row | null> {
 export async function getSettings(): Promise<AiCallSettings> {
   const row = await readRow()
   const fromEnv = envApiKey()
+  const openaiFromEnv = envOpenAiKey()
   const minutes = typeof row?.max_call_minutes === 'number' ? row.max_call_minutes : 15
   return {
     enabled: row?.enabled === true,
@@ -119,7 +198,28 @@ export async function getSettings(): Promise<AiCallSettings> {
     toolIds: toolIdMap(row?.tool_ids),
     syncedHash: str(row?.synced_hash) ?? '',
     syncedAt: row?.synced_at instanceof Date ? row.synced_at : null,
+    engine: isEngine(row?.engine) ? row.engine : 'elevenlabs',
+    openaiApiKey: openaiFromEnv ?? tryDecryptSecret(str(row?.openai_api_key_encrypted)),
+    openaiApiKeyFromEnv: !!openaiFromEnv,
+    openaiProjectId: str(row?.openai_project_id) ?? '',
+    openaiWebhookSecret: tryDecryptSecret(str(row?.openai_webhook_secret_encrypted)),
+    liveVoice: str(row?.live_voice) ?? DEFAULT_LIVE_VOICE,
+    liveBackendModel: str(row?.live_backend_model) ?? DEFAULT_LIVE_BACKEND_MODEL,
+    liveRegion: isLiveRegion(row?.live_region) ? row.live_region : 'global',
   }
+}
+
+/** Whether GPT-Live has everything a call needs: a key to accept it with, the
+ *  project the SIP address names, and the secret that proves a webhook came
+ *  from OpenAI. Nothing is made on OpenAI's side in advance, so this is the
+ *  whole of "set up". */
+export function liveReady(settings: AiCallSettings): boolean {
+  return !!settings.openaiApiKey && /^proj_[A-Za-z0-9]+$/.test(settings.openaiProjectId) && !!settings.openaiWebhookSecret
+}
+
+/** Whether the chosen engine can take a call. */
+export function engineReady(settings: AiCallSettings): boolean {
+  return settings.engine === 'gpt-live' ? liveReady(settings) : !!settings.agentId
 }
 
 async function ensureRow(): Promise<void> {
@@ -139,6 +239,14 @@ export type SettingsPatch = {
   extraInstructions?: string
   emailSignature?: string
   maxCallMinutes?: number
+  engine?: Engine
+  openaiApiKey?: string
+  clearOpenaiApiKey?: boolean
+  openaiProjectId?: string
+  openaiWebhookSecret?: string
+  liveVoice?: string
+  liveBackendModel?: string
+  liveRegion?: LiveRegion
 }
 
 /** Written a column at a time: every value is optional, and a template literal
@@ -181,6 +289,31 @@ export async function updateSettings(patch: SettingsPatch): Promise<void> {
   if (patch.maxCallMinutes !== undefined) {
     const minutes = Math.min(Math.max(Math.round(patch.maxCallMinutes), 1), MAX_CALL_MINUTES_LIMIT)
     await prisma.$executeRaw`UPDATE "acall_settings" SET "max_call_minutes" = ${minutes} WHERE "id" = 'singleton'`
+  }
+  if (patch.engine !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "engine" = ${patch.engine} WHERE "id" = 'singleton'`
+  }
+  if (patch.clearOpenaiApiKey) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "openai_api_key_encrypted" = NULL WHERE "id" = 'singleton'`
+  } else if (patch.openaiApiKey) {
+    const encrypted = encryptSecret(patch.openaiApiKey.trim())
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "openai_api_key_encrypted" = ${encrypted} WHERE "id" = 'singleton'`
+  }
+  if (patch.openaiProjectId !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "openai_project_id" = ${patch.openaiProjectId.trim()} WHERE "id" = 'singleton'`
+  }
+  if (patch.openaiWebhookSecret) {
+    const encrypted = encryptSecret(patch.openaiWebhookSecret.trim())
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "openai_webhook_secret_encrypted" = ${encrypted} WHERE "id" = 'singleton'`
+  }
+  if (patch.liveVoice !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "live_voice" = ${patch.liveVoice.trim() || DEFAULT_LIVE_VOICE} WHERE "id" = 'singleton'`
+  }
+  if (patch.liveBackendModel !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "live_backend_model" = ${patch.liveBackendModel.trim() || DEFAULT_LIVE_BACKEND_MODEL} WHERE "id" = 'singleton'`
+  }
+  if (patch.liveRegion !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "live_region" = ${patch.liveRegion} WHERE "id" = 'singleton'`
   }
   await prisma.$executeRaw`UPDATE "acall_settings" SET "updated_at" = CURRENT_TIMESTAMP WHERE "id" = 'singleton'`
 }

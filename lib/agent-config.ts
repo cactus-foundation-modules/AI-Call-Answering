@@ -421,6 +421,15 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
 }
 
+/** What the model is told about one tool, without the call-identity fields
+ *  ElevenLabs fills in. The GPT-Live engine builds its function tools from
+ *  this, so both engines describe every tool in the same words. */
+export function toolDefinition(name: ToolName): Readonly<ToolDefinition> {
+  return TOOL_DEFINITIONS[name]
+}
+
+export type { ToolDefinition }
+
 /** An ElevenLabs webhook-tool definition that calls back into this site. */
 export function buildToolConfig(name: ToolName, siteUrl: string, toolsToken: string): Record<string, unknown> {
   const definition = TOOL_DEFINITIONS[name]

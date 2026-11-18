@@ -99,11 +99,45 @@ export function mapCall(row: Record<string, unknown>): CallRecord {
 
 /** Opens the record for a call that has just been handed to the assistant. A
  *  repeat for the same call (Twilio retries a webhook) changes nothing. */
-export async function openCall(input: { callSid: string; fromNumber: string; toNumber: string }): Promise<void> {
+export async function openCall(input: { callSid: string; fromNumber: string; toNumber: string; engine?: 'elevenlabs' | 'gpt-live' }): Promise<void> {
+  const engine = input.engine ?? 'elevenlabs'
   await prisma.$executeRaw`
-    INSERT INTO "acall_calls" ("call_sid", "from_number", "to_number")
-    VALUES (${input.callSid}, ${input.fromNumber}, ${input.toNumber})
+    INSERT INTO "acall_calls" ("call_sid", "from_number", "to_number", "engine")
+    VALUES (${input.callSid}, ${input.fromNumber}, ${input.toNumber}, ${engine})
     ON CONFLICT ("call_sid") DO NOTHING
+  `
+}
+
+/** A GPT-Live call this site put through and has not yet tied to an OpenAI
+ *  session. Anything else - a call that ended, one already claimed by another
+ *  session, one older than an hour - cannot be picked up by a webhook naming
+ *  it. */
+export async function claimLiveCall(callSid: string, sessionId: string): Promise<CallRecord | null> {
+  const claimed = await prisma.$executeRaw`
+    UPDATE "acall_calls" SET
+      "live_session_id" = ${sessionId},
+      "conversation_id" = COALESCE("conversation_id", ${sessionId}),
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "call_sid" = ${callSid} AND "engine" = 'gpt-live' AND "status" = 'in_progress'
+      AND "live_session_id" IS NULL AND "started_at" > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+  `
+  return claimed > 0 ? findCall({ callSid }) : null
+}
+
+/** What the thinking side of a GPT-Live call used. Cached tokens are the part
+ *  of the input the prompt cache served. */
+export type CallUsage = {
+  seconds: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  responses: number
+}
+
+export async function recordUsage(callId: string, usage: CallUsage): Promise<void> {
+  const json = JSON.stringify(usage)
+  await prisma.$executeRaw`
+    UPDATE "acall_calls" SET "usage" = ${json}::jsonb, "updated_at" = CURRENT_TIMESTAMP WHERE "id" = ${callId}
   `
 }
 

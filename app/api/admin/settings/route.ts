@@ -9,13 +9,26 @@ import { assistantNeedsSetup, autoResyncDue, fallbackNeedsSetup, postCallWebhook
 import { MAX_FALLBACK_KEYS, listFallbackKeys } from '@/modules/ai-call-answering/lib/fallback-keys'
 import { EXTRA_INSTRUCTIONS_MAX_LENGTH } from '@/modules/ai-call-answering/lib/instruction-conflicts'
 import {
+  ENGINES,
+  ENGINE_CHOICES,
   LANGUAGE_CHOICES,
+  LIVE_BACKEND_MODEL_CHOICES,
+  LIVE_REGIONS,
+  LIVE_REGION_CHOICES,
+  LIVE_VOICE_CHOICES,
   LLM_CHOICES,
   MAX_CALL_MINUTES_LIMIT,
   TTS_MODEL_CHOICES,
+  engineReady,
   getSettings,
+  liveReady,
   updateSettings,
 } from '@/modules/ai-call-answering/lib/settings'
+
+/** Where the owner points the OpenAI project's webhook. */
+function liveWebhookUrl(siteUrl: string): string {
+  return `${siteUrl}/api/m/ai-call-answering/webhooks/openai-live`
+}
 
 async function guard() {
   const user = await getSessionFromCookie()
@@ -61,6 +74,21 @@ async function currentState() {
     llms: LLM_CHOICES,
     languages: LANGUAGE_CHOICES,
     maxCallMinutesLimit: MAX_CALL_MINUTES_LIMIT,
+    engine: settings.engine,
+    engines: ENGINE_CHOICES,
+    // As with ElevenLabs: whether there is a key and a secret, never the values.
+    hasOpenaiApiKey: !!settings.openaiApiKey,
+    openaiApiKeyFromEnv: settings.openaiApiKeyFromEnv,
+    openaiProjectId: settings.openaiProjectId,
+    hasOpenaiWebhookSecret: !!settings.openaiWebhookSecret,
+    liveVoice: settings.liveVoice,
+    liveBackendModel: settings.liveBackendModel,
+    liveRegion: settings.liveRegion,
+    liveReady: liveReady(settings),
+    liveVoices: LIVE_VOICE_CHOICES,
+    liveBackendModels: LIVE_BACKEND_MODEL_CHOICES,
+    liveRegions: LIVE_REGION_CHOICES,
+    liveWebhookUrl: liveWebhookUrl(siteUrl),
   }
 }
 
@@ -83,6 +111,14 @@ const FIELD_LABELS: Record<string, string> = {
   maxCallMinutes: 'Maximum call length',
   enabled: 'Switch on/off',
   clearApiKey: 'Clear API key',
+  engine: 'Voice engine',
+  openaiApiKey: 'OpenAI API key',
+  clearOpenaiApiKey: 'Clear OpenAI API key',
+  openaiProjectId: 'OpenAI project ID',
+  openaiWebhookSecret: 'OpenAI webhook signing secret',
+  liveVoice: 'GPT-Live voice',
+  liveBackendModel: 'GPT-Live thinking model',
+  liveRegion: 'GPT-Live region',
 }
 
 /** Spells out which field failed and why, instead of a blanket "did not make sense". */
@@ -120,6 +156,15 @@ const Body = z.object({
   extraInstructions: z.string().max(EXTRA_INSTRUCTIONS_MAX_LENGTH).optional(),
   emailSignature: z.string().max(10000).optional(),
   maxCallMinutes: z.number().int().min(1).max(MAX_CALL_MINUTES_LIMIT).optional(),
+  engine: z.enum(ENGINES).optional(),
+  openaiApiKey: z.string().trim().min(1).max(500).optional(),
+  clearOpenaiApiKey: z.boolean().optional(),
+  // Empty clears it; otherwise the shape OpenAI shows under Settings > Project.
+  openaiProjectId: z.string().trim().max(100).regex(/^(proj_[A-Za-z0-9]+)?$/, 'starts with proj_ and has only letters and numbers after it').optional(),
+  openaiWebhookSecret: z.string().trim().min(1).max(500).regex(/^whsec_[A-Za-z0-9+/=]+$/, 'starts with whsec_').optional(),
+  liveVoice: z.string().trim().min(1).max(128).optional(),
+  liveBackendModel: z.string().trim().min(1).max(100).optional(),
+  liveRegion: z.enum(LIVE_REGIONS).optional(),
 })
 
 export async function PATCH(request: NextRequest) {
@@ -136,7 +181,7 @@ export async function PATCH(request: NextRequest) {
 
   // Switching the assistant on with nothing behind it would send callers to
   // forwarding anyway, but it would look as though it were working.
-  if (parsed.data.enabled === true && !(await getSettings()).agentId) {
+  if (parsed.data.enabled === true && !engineReady(await getSettings())) {
     return errorResponse('Set the assistant up first, then switch it on.')
   }
 

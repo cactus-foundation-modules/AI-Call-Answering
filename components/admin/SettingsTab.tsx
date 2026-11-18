@@ -3,8 +3,9 @@
 // "AI Call Answering" tab on the core admin settings page (settingsTabs
 // manifest entry), split into sub-tabs:
 //
-//   Assistant - ElevenLabs key, voice, model and wording, and the button that
-//               sets the assistant up on the ElevenLabs side
+//   Assistant - which voice engine (ElevenLabs or OpenAI GPT-Live), its keys,
+//               voice, model and wording, and the button that sets the
+//               assistant up on the ElevenLabs side
 //   Numbers   - which of the site's Twilio numbers the assistant answers
 //   Calls     - what the assistant has handled, with callbacks to make
 //
@@ -54,7 +55,24 @@ type State = {
   maxCallMinutesLimit: number
   fallbackKeys: Array<{ id: string; label: string; isSetUp: boolean; needsSetup: boolean }>
   maxFallbackKeys: number
+  engine: Engine
+  engines: Array<{ id: Engine; label: string }>
+  hasOpenaiApiKey: boolean
+  openaiApiKeyFromEnv: boolean
+  openaiProjectId: string
+  hasOpenaiWebhookSecret: boolean
+  liveVoice: string
+  liveBackendModel: string
+  liveRegion: LiveRegion
+  liveReady: boolean
+  liveVoices: Choice[]
+  liveBackendModels: Choice[]
+  liveRegions: Array<{ id: LiveRegion; label: string }>
+  liveWebhookUrl: string
 }
+
+type Engine = 'elevenlabs' | 'gpt-live'
+type LiveRegion = 'global' | 'eu' | 'in'
 
 type Draft = {
   apiKey: string
@@ -67,6 +85,13 @@ type Draft = {
   extraInstructions: string
   emailSignature: string
   maxCallMinutes: number
+  engine: Engine
+  openaiApiKey: string
+  openaiProjectId: string
+  openaiWebhookSecret: string
+  liveVoice: string
+  liveBackendModel: string
+  liveRegion: LiveRegion
 }
 
 type NumberRow = {
@@ -114,6 +139,14 @@ function draftOf(state: State): Draft {
     extraInstructions: state.extraInstructions,
     emailSignature: state.emailSignature,
     maxCallMinutes: state.maxCallMinutes,
+    engine: state.engine,
+    // Secrets are never sent back, as with the ElevenLabs key.
+    openaiApiKey: '',
+    openaiProjectId: state.openaiProjectId,
+    openaiWebhookSecret: '',
+    liveVoice: state.liveVoice,
+    liveBackendModel: state.liveBackendModel,
+    liveRegion: state.liveRegion,
   }
 }
 
@@ -209,8 +242,15 @@ function AssistantSection() {
       extraInstructions: draft.extraInstructions,
       emailSignature: draft.emailSignature,
       maxCallMinutes: draft.maxCallMinutes,
+      engine: draft.engine,
+      openaiProjectId: draft.openaiProjectId,
+      liveVoice: draft.liveVoice,
+      liveBackendModel: draft.liveBackendModel,
+      liveRegion: draft.liveRegion,
     }
     if (draft.apiKey.trim()) body.apiKey = draft.apiKey.trim()
+    if (draft.openaiApiKey.trim()) body.openaiApiKey = draft.openaiApiKey.trim()
+    if (draft.openaiWebhookSecret.trim()) body.openaiWebhookSecret = draft.openaiWebhookSecret.trim()
     return body
   }
 
@@ -272,8 +312,12 @@ function AssistantSection() {
     return enabled ? 'The assistant is switched on.' : 'The assistant is switched off. Calls go to forwarding and voicemail.'
   })
 
+  const live = saved.engine === 'gpt-live'
+  const liveDraft = draft.engine === 'gpt-live'
   let status = 'Not set up yet'
-  if (saved.isSetUp) {
+  if (live) {
+    status = saved.liveReady ? 'GPT-Live is ready' : 'GPT-Live needs its OpenAI key, project ID and webhook secret'
+  } else if (saved.isSetUp) {
     status = !saved.needsSetup
       ? 'Set up and up to date'
       : saved.updatePending
@@ -302,12 +346,25 @@ function AssistantSection() {
               If anything goes wrong, the call falls back to your usual forwarding and voicemail.
             </InfoTip>
           </div>
-          <p className="field-hint"><strong>{status}.</strong>{saved.syncedAt ? ` Last set up ${new Date(saved.syncedAt).toLocaleString()}.` : ''}</p>
+          <p className="field-hint"><strong>{status}.</strong>{!live && saved.syncedAt ? ` Last set up ${new Date(saved.syncedAt).toLocaleString()}.` : ''}</p>
+          <div className="field">
+            <label>Voice engine</label>
+            <select value={draft.engine} style={{ maxWidth: '36rem' }} onChange={(e) => set('engine', e.target.value === 'gpt-live' ? 'gpt-live' : 'elevenlabs')}>
+              {saved.engines.map((engine) => <option key={engine.id} value={engine.id}>{engine.label}</option>)}
+            </select>
+            <p className="field-hint">
+              {liveDraft
+                ? 'OpenAI\u2019s own voice model takes the call and hands every question to a separate thinking model, which uses the same lookups and rules as the ElevenLabs assistant. Charged by OpenAI per minute, plus the thinking model\u2019s use. Press Save changes to switch.'
+                : 'ElevenLabs voices with the speech and thinking models chosen below. Press Save changes to switch.'}
+            </p>
+          </div>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-            <button type="button" className="btn btn-primary" onClick={setUp} disabled={busy || (!saved.hasApiKey && !draft.apiKey.trim())}>
-              {saved.isSetUp ? 'Update the assistant' : 'Set up the assistant'}
-            </button>
-            {saved.isSetUp && (
+            {!live && (
+              <button type="button" className="btn btn-primary" onClick={setUp} disabled={busy || (!saved.hasApiKey && !draft.apiKey.trim())}>
+                {saved.isSetUp ? 'Update the assistant' : 'Set up the assistant'}
+              </button>
+            )}
+            {(live ? saved.liveReady : saved.isSetUp) && (
               <button type="button" className={saved.enabled ? 'btn btn-secondary' : 'btn btn-primary'} onClick={() => toggle(!saved.enabled)} disabled={busy}>
                 {saved.enabled ? 'Switch off' : 'Switch on'}
               </button>
@@ -319,11 +376,98 @@ function AssistantSection() {
               : 'The assistant is OFF. Nothing changes for your callers until it is switched on and a number is ticked.'}
           </p>
           <p className="field-hint">
-            Setting it up saves the settings on this page and then creates or updates the assistant at ElevenLabs. Run it
-            again after changing the voice, the wording or the shop name.
+            {live
+              ? 'GPT-Live needs nothing setting up at OpenAI beyond the webhook: every call is given the latest wording and voice as it arrives, so saving is enough.'
+              : 'Setting it up saves the settings on this page and then creates or updates the assistant at ElevenLabs. Run it again after changing the voice, the wording or the shop name.'}
           </p>
         </div>
 
+        {liveDraft && (
+          <div className="card">
+            <div className="card-title">
+              OpenAI GPT-Live
+              <InfoTip>
+                Calls are put through to your OpenAI project&rsquo;s phone address. OpenAI then asks this site whether to
+                take each one, and the site answers with the assistant&rsquo;s instructions and keeps a connection open
+                for the lookups until the caller hangs up. The instructions are the same for every call, so OpenAI can
+                reuse them from its prompt cache rather than charge for reading them afresh each time.
+              </InfoTip>
+            </div>
+            {saved.openaiApiKeyFromEnv ? (
+              <div className="alert alert-info">
+                The key is set on this site&rsquo;s hosting (<code>OPENAI_API_KEY</code>), so there is nothing to type in.
+              </div>
+            ) : (
+              <div className="field">
+                <label>OpenAI API key</label>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={draft.openaiApiKey}
+                  placeholder={saved.hasOpenaiApiKey ? 'A key is saved. Type a new one to replace it.' : 'Paste your key here'}
+                  onChange={(e) => set('openaiApiKey', e.target.value)}
+                />
+                <p className="field-hint">
+                  A project key from <strong>platform.openai.com</strong>, made in the same project as the webhook below.
+                  Stored encrypted and never shown again.
+                  {saved.hasOpenaiApiKey && (
+                    <>
+                      {' '}
+                      <button type="button" className="btn btn-link btn-sm" disabled={busy} onClick={() => { void run(async () => (await patch({ clearOpenaiApiKey: true })) ? 'Key removed.' : null) }}>
+                        Remove the saved key
+                      </button>
+                    </>
+                  )}
+                </p>
+              </div>
+            )}
+            <div className="field">
+              <label>Project ID</label>
+              <input type="text" value={draft.openaiProjectId} placeholder="proj_..." style={{ maxWidth: '24rem' }} onChange={(e) => set('openaiProjectId', e.target.value)} />
+              <p className="field-hint">Under Settings, Project, General. Calls are put through to this project.</p>
+            </div>
+            <div className="field">
+              <label>Webhook</label>
+              <p className="field-hint">
+                In the same project, under Settings, Webhooks, add an endpoint at <code>{saved.liveWebhookUrl}</code> for
+                the <code>live.transport.incoming</code> event, then paste its signing secret here.
+              </p>
+              <input
+                type="password"
+                autoComplete="off"
+                value={draft.openaiWebhookSecret}
+                placeholder={saved.hasOpenaiWebhookSecret ? 'A secret is saved. Type a new one to replace it.' : 'whsec_...'}
+                onChange={(e) => set('openaiWebhookSecret', e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>Voice</label>
+              <input type="text" list="acall-live-voices" value={draft.liveVoice} style={{ maxWidth: '24rem' }} onChange={(e) => set('liveVoice', e.target.value)} />
+              <datalist id="acall-live-voices">
+                {saved.liveVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+              </datalist>
+              <p className="field-hint">One of OpenAI&rsquo;s voices, or the id of a custom voice made in your OpenAI project.</p>
+            </div>
+            <div className="field">
+              <label>Thinking model</label>
+              <select value={draft.liveBackendModel} style={{ maxWidth: '30rem' }} onChange={(e) => set('liveBackendModel', e.target.value)}>
+                {saved.liveBackendModels.some((model) => model.id === draft.liveBackendModel)
+                  ? null
+                  : <option value={draft.liveBackendModel}>{draft.liveBackendModel}</option>}
+                {saved.liveBackendModels.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+              </select>
+              <p className="field-hint">Answers the questions the voice hands over and makes the lookups.</p>
+            </div>
+            <div className="field">
+              <label>Where calls are handled</label>
+              <select value={draft.liveRegion} style={{ maxWidth: '16rem' }} onChange={(e) => set('liveRegion', e.target.value === 'eu' ? 'eu' : e.target.value === 'in' ? 'in' : 'global')}>
+                {saved.liveRegions.map((region) => <option key={region.id} value={region.id}>{region.label}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {!liveDraft && (
         <div className="card">
           <div className="card-title">ElevenLabs</div>
           {saved.apiKeyFromEnv ? (
@@ -356,6 +500,9 @@ function AssistantSection() {
           )}
         </div>
 
+        )}
+
+        {!liveDraft && (
         <div className="card">
           <div className="card-title">
             Fallback ElevenLabs keys
@@ -403,8 +550,11 @@ function AssistantSection() {
           )}
         </div>
 
+        )}
+
         <div className="card">
-          <div className="card-title">Voice and brain</div>
+          <div className="card-title">{liveDraft ? 'Language and length' : 'Voice and brain'}</div>
+          {!liveDraft && (<>
           <div className="field">
             <label>Voice</label>
             <VoicePicker
@@ -429,6 +579,7 @@ function AssistantSection() {
             </select>
             <p className="field-hint">Works out what to say and which lookups to make. Quicker models answer sooner, careful ones slip up less.</p>
           </div>
+          </>)}
           <div className="field">
             <label>Language</label>
             <select value={draft.language} style={{ maxWidth: '12rem' }} onChange={(e) => set('language', e.target.value)}>
@@ -439,7 +590,7 @@ function AssistantSection() {
             <label>Longest call (minutes)</label>
             <input type="number" min={1} max={saved.maxCallMinutesLimit} value={draft.maxCallMinutes} style={{ maxWidth: '8rem' }}
               onChange={(e) => set('maxCallMinutes', Math.min(Math.max(Number(e.target.value) || 1, 1), saved.maxCallMinutesLimit))} />
-            <p className="field-hint">The assistant ends a call that runs past this. ElevenLabs charges by the minute.</p>
+            <p className="field-hint">The assistant ends a call that runs past this. {liveDraft ? 'OpenAI' : 'ElevenLabs'} charges by the minute.</p>
           </div>
         </div>
 
