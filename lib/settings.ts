@@ -70,26 +70,68 @@ export const LIVE_MODEL = 'gpt-live-1'
 
 export const DEFAULT_LIVE_VOICE = 'marin'
 
-/** Built-in GPT-Live voices, as the accept endpoint's reference lists them.
- *  The box also takes any other name or a custom voice id. */
-export const LIVE_VOICE_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'marin', label: 'Marin (OpenAI default)' },
-  { id: 'cedar', label: 'Cedar' },
-  { id: 'stone', label: 'Stone' },
-  { id: 'meridian', label: 'Meridian' },
-  { id: 'quartz', label: 'Quartz' },
-  { id: 'ripple', label: 'Ripple' },
-  { id: 'vesper', label: 'Vesper' },
-  { id: 'willow', label: 'Willow' },
-  { id: 'gleam', label: 'Gleam' },
-  { id: 'bossa', label: 'Bossa' },
-  { id: 'tempo', label: 'Tempo' },
-  { id: 'beacon', label: 'Beacon' },
-  { id: 'delta', label: 'Delta' },
-  { id: 'cinder', label: 'Cinder' },
-  { id: 'sage', label: 'Sage' },
-  { id: 'pearl', label: 'Pearl' },
+export type LiveVoiceChoice = {
+  id: string
+  label: string
+  /** Heading the voice sits under in the picker. */
+  group: string
+  /** What OpenAI says about it, in a few words. Empty where OpenAI says nothing. */
+  description: string
+}
+
+/** Every built-in GPT-Live voice, as the accept endpoint's reference lists them
+ *  (38 on 2026-11-18). Descriptions come from OpenAI's Live voice table and its
+ *  text-to-speech guide; voices neither describes say so rather than guess.
+ *  Ordered for a British shop: British and Irish first. The picker also takes
+ *  the id of a custom voice made in the OpenAI project. */
+export const LIVE_VOICE_CHOICES: ReadonlyArray<LiveVoiceChoice> = [
+  { id: 'vesper', label: 'Vesper', group: 'British and Irish English', description: 'British, masculine, natural' },
+  { id: 'willow', label: 'Willow', group: 'British and Irish English', description: 'Irish, feminine, natural' },
+  { id: 'stone', label: 'Stone', group: 'British and Irish English', description: 'Irish, masculine, natural' },
+
+  { id: 'marin', label: 'Marin', group: 'OpenAI standard voices (English)', description: 'OpenAI default, one of its two best-quality voices' },
+  { id: 'cedar', label: 'Cedar', group: 'OpenAI standard voices (English)', description: 'One of OpenAI\u2019s two best-quality voices' },
+  { id: 'alloy', label: 'Alloy', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'ash', label: 'Ash', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'ballad', label: 'Ballad', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'coral', label: 'Coral', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'echo', label: 'Echo', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'sage', label: 'Sage', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'shimmer', label: 'Shimmer', group: 'OpenAI standard voices (English)', description: '' },
+  { id: 'verse', label: 'Verse', group: 'OpenAI standard voices (English)', description: '' },
+
+  { id: 'quartz', label: 'Quartz', group: 'Other English accents', description: 'Australian, feminine, generated' },
+  { id: 'ripple', label: 'Ripple', group: 'Other English accents', description: 'Australian, masculine, natural' },
+  { id: 'gleam', label: 'Gleam', group: 'Other English accents', description: 'North American, feminine, natural' },
+  { id: 'meridian', label: 'Meridian', group: 'Other English accents', description: 'North American, masculine, natural' },
+  { id: 'delta', label: 'Delta', group: 'Other English accents', description: 'Southern US, feminine, generated' },
+  { id: 'cinder', label: 'Cinder', group: 'Other English accents', description: 'Southern US, masculine, generated' },
+  { id: 'beacon', label: 'Beacon', group: 'Other English accents', description: 'Filipino, masculine, generated' },
+
+  { id: 'brise', label: 'Brise', group: 'Other languages', description: 'French, feminine, natural' },
+  { id: 'sillage', label: 'Sillage', group: 'Other languages', description: 'French, masculine, natural' },
+  { id: 'nuri', label: 'Nuri', group: 'Other languages', description: 'German, feminine, natural' },
+  { id: 'juni', label: 'Juni', group: 'Other languages', description: 'German, feminine, natural' },
+  { id: 'flitz', label: 'Flitz', group: 'Other languages', description: 'German, masculine, natural' },
+  { id: 'bossa', label: 'Bossa', group: 'Other languages', description: 'Brazilian Portuguese, feminine, natural' },
+  { id: 'tempo', label: 'Tempo', group: 'Other languages', description: 'Brazilian Portuguese, masculine, natural' },
+  { id: 'nira', label: 'Nira', group: 'Other languages', description: 'Hindi, feminine, natural' },
+  { id: 'harema', label: 'Harema', group: 'Other languages', description: 'Japanese, feminine, natural' },
+  { id: 'shida', label: 'Shida', group: 'Other languages', description: 'Japanese, masculine, natural' },
+  { id: 'noeul', label: 'Noeul', group: 'Other languages', description: 'Korean, feminine, natural' },
+
+  { id: 'calandria', label: 'Calandria', group: 'Not yet described by OpenAI', description: '' },
+  { id: 'compas', label: 'Compas', group: 'Not yet described by OpenAI', description: '' },
+  { id: 'destello', label: 'Destello', group: 'Not yet described by OpenAI', description: '' },
+  { id: 'halo', label: 'Halo', group: 'Not yet described by OpenAI', description: '' },
+  { id: 'hornero', label: 'Hornero', group: 'Not yet described by OpenAI', description: '' },
+  { id: 'luciernaga', label: 'Luciernaga', group: 'Not yet described by OpenAI', description: '' },
+  { id: 'pearl', label: 'Pearl', group: 'Not yet described by OpenAI', description: '' },
 ]
+
+export function isBuiltInLiveVoice(id: string): boolean {
+  return LIVE_VOICE_CHOICES.some((voice) => voice.id === id)
+}
 
 /** The backend model GPT-Live hands questions and lookups to. OpenAI suggests
  *  starting with Luna and moving to Sol for harder work. */

@@ -18,6 +18,7 @@ import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/
 import { InfoTip } from '@/components/admin/InfoTip'
 import type { ModuleSettingsTabProps } from '@/lib/modules/hosted-settings'
 import { VoicePicker, type Voice } from './VoicePicker'
+import { LiveVoicePicker, type LiveVoice } from './LiveVoicePicker'
 import { EXTRA_INSTRUCTIONS_MAX_LENGTH, findInstructionConflicts } from '@/modules/ai-call-answering/lib/instruction-conflicts'
 
 const SETTINGS_API = '/api/m/ai-call-answering/admin/settings'
@@ -65,7 +66,7 @@ type State = {
   liveBackendModel: string
   liveRegion: LiveRegion
   liveReady: boolean
-  liveVoices: Choice[]
+  liveVoices: LiveVoice[]
   liveBackendModels: Choice[]
   liveRegions: Array<{ id: LiveRegion; label: string }>
   liveWebhookUrl: string
@@ -442,11 +443,12 @@ function AssistantSection() {
             </div>
             <div className="field">
               <label>Voice</label>
-              <input type="text" list="acall-live-voices" value={draft.liveVoice} style={{ maxWidth: '24rem' }} onChange={(e) => set('liveVoice', e.target.value)} />
-              <datalist id="acall-live-voices">
-                {saved.liveVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
-              </datalist>
-              <p className="field-hint">One of OpenAI&rsquo;s voices, or the id of a custom voice made in your OpenAI project.</p>
+              <LiveVoicePicker
+                value={draft.liveVoice}
+                voices={saved.liveVoices}
+                canPreview={saved.hasOpenaiApiKey || saved.openaiApiKeyFromEnv}
+                onSelect={(id) => set('liveVoice', id)}
+              />
             </div>
             <div className="field">
               <label>Thinking model</label>

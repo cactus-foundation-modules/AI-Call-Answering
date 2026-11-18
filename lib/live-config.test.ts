@@ -99,7 +99,7 @@ describe('GPT-Live accept body', () => {
 describe('putting the call through', () => {
   it('dials the project over TLS with a signed call reference', () => {
     const uri = liveSipUri('proj_abc123', 'eu', 'CA123', 'whsec_secret')
-    expect(uri.startsWith('sip:proj_abc123@sip-eu.api.openai.com;transport=tls?')).toBe(true)
+    expect(uri.startsWith('sip:proj_abc123@sip-eu.api.openai.com;transport=tls;secure=true?')).toBe(true)
     const params = new URLSearchParams(uri.split('?')[1])
     expect(params.get(CALL_HEADER)).toBe('CA123')
     expect(params.get(CALL_SIGNATURE_HEADER)).toBe(callSignature('CA123', 'whsec_secret'))

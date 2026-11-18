@@ -195,13 +195,19 @@ export function callSignatureMatches(callSid: string, signature: string, secret:
   return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
-/** The address Twilio dials, with the call reference and its signature. */
+/** The address Twilio dials, with the call reference and its signature.
+ *
+ *  `secure=true` is what makes Twilio encrypt the call audio (SRTP) as well as
+ *  the signalling. `transport=tls` alone only covers the signalling, and
+ *  GPT-Live refuses such a call at accept with "Live SIP calls require SRTP",
+ *  which sends every caller to voicemail. Both are kept: `secure=true` implies
+ *  TLS, and saying so does no harm. */
 export function liveSipUri(projectId: string, region: LiveRegion, callSid: string, secret: string): string {
   const headers = new URLSearchParams({
     [CALL_HEADER]: callSid,
     [CALL_SIGNATURE_HEADER]: callSignature(callSid, secret),
   })
-  return `sip:${projectId}@${SIP_HOSTS[region]};transport=tls?${headers.toString()}`
+  return `sip:${projectId}@${SIP_HOSTS[region]};transport=tls;secure=true?${headers.toString()}`
 }
 
 /** Reads one header from the webhook's list, ignoring case. The list is the
