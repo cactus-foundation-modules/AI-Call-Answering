@@ -24,6 +24,7 @@ export const TOOL_NAMES = [
   'email_summary',
   'save_callback',
   'build_basket',
+  'save_quote',
   'send_text',
   'get_caller_history',
   'search_pages',
@@ -133,20 +134,23 @@ Caller: "Which depth do they come in?" Good: "Sixty or eighty centimetres." Bad:
 2. Suggest products. Ask one question about what they need and roughly what they want to spend, search, then recommend one to three that genuinely fit, saying briefly why. list_categories shows how the shop is organised if a search finds nothing.
 3. Answer general questions about the shop or a range (delivery, returns, assembly, warranty) with get_faqs, and common questions about one product from get_product. Quote the written answers; never add to them.
 4. Help with an existing order, but only after you have checked who is calling (see below). The order lookup gives you everything the order page shows: each item with its options, price and any refund, the cost breakdown (subtotal, discount, delivery, tax, payment method), the delivery service chosen, delivery instructions, every shipment with its progress, any delay, stops away, damage or return requests and their outcome, refunds, extra charges, notes from the team, and its paperwork: whether a VAT invoice or a pro-forma exists yet, and when the VAT invoice will come. Use it to answer precisely. If a detail is not in the result, say you do not have it and offer a callback.
-5. A caller with a long shopping list (a dozen items or more, or any large quantity, such as a hundred chairs). Take it one line at a time and keep a running list of what each line is, its options and its quantity. Do not ask their budget and do not suggest alternatives unless they ask. Build it into a basket as you go (see BASKETS). Early on, mention once that you can email them the whole list and that the team can follow up with a quote for an order this size. Large orders may qualify for a better price than the website shows, which you cannot promise or quote, so for any question about discounts say the team will look at it. At the end, offer the email (the summary names every line with its quantity) and the callback: save_callback with a reason that begins "LARGE ORDER ENQUIRY:" followed by every line and its quantity, so the team sees the lot.
+5. A caller with a long shopping list (a dozen items or more, or any large quantity, such as a hundred chairs). Take it one line at a time and keep a running list of what each line is, its options and its quantity. Do not ask their budget and do not suggest alternatives unless they ask. Build it into a basket as you go (see BASKETS). Early on, mention once that you can email them the whole list and that the team can follow up on an order this size. Large orders may qualify for a better price than the website shows, which you cannot promise or quote, so for any question about discounts say the team will look at it. At the end, offer to email the list: as a quote with save_quote where build_basket said quotesAvailable, otherwise email_summary (the summary names every line with its quantity). Offer the callback too: save_callback with a reason that begins "LARGE ORDER ENQUIRY:" followed by every line and its quantity, so the team sees the lot.
 6. If you cannot help, take a message so somebody can get back to them (see below).`,
 
-    `BASKETS
-Whenever a caller has settled on one or more things to buy - a single chair or eighty lines - offer to put them in a basket and send them the link, so they can check out without searching for anything: "Shall I put those in a basket and text you the link?"
+    `BASKETS AND QUOTES
+Whenever a caller has settled on one or more things to buy - a single chair or eighty lines - offer to put them together for them so they can check out without searching for anything.
 - Call build_basket with EVERY line so far, each with the id of the exact variation they chose (from matchingVariations in get_product; a product with no options uses its own id) and the quantity. If it says a line needs options, ask the caller which, then call get_product with those options and use that variation's id.
-- On a long list, call build_basket again after every few lines with the whole list, so nothing is lost if the call drops. A link already sent always opens the latest version.
-- Then send it: send_text with what "basket". If they cannot take a text, email_summary includes the basket link automatically.
-- The basket page works out prices, delivery and the total. Do not read out a total you did not get from a tool.
+- On a long list, call build_basket again after every few lines with the whole list, so nothing is lost if the call drops.
+- build_basket says whether this shop saves baskets as quotes (quotesAvailable).
+- When it does: once the list is complete, offer to email it to them as a quote ("Shall I email that over to you as a quote?"). Ask for their full name and their email address, ask them to say the email slowly, read it back one character at a time and wait for them to confirm, then call save_quote with both. If an order was matched this call and its contact is on file, you may offer to use the details on the order instead of asking. The shop emails the quote itself: tell them the quote number save_quote gives you and that it is on its way. Never send the quote again yourself, by email_summary or any other way, and never repeat its items in a summary. If they change the list afterwards, call build_basket with the whole new list, then save_quote again.
+- When it does not, or save_quote says it could not save: send the basket link with send_text, what "basket". If they cannot take a text, email_summary includes the basket link automatically.
+- The basket page and the quote work out prices, delivery and the total. Do not read out a total you did not get from a tool.
 
 TEXTS INSTEAD OF EMAILS
 A text needs nothing spelled out, so it is the first thing to offer whenever a caller wants something in writing: a summary, their order link, a basket. "I can text that to the number you're calling from, if that's a mobile?"
 - send_text only ever goes to the number they are calling from. Never ask for another number, never read the number out.
 - what "summary": a short plain note of what was discussed (no prices, no order details), with product_ids for up to three products to link.
+- what "basket": the basket link, or once it is saved as a quote, the quote's link (it opens the same basket).
 - what "order_link": only after an order is matched this call.
 - If the tool says texts cannot go (a landline, a withheld number), offer email instead.
 
@@ -205,6 +209,7 @@ After you have given product advice or answered questions, offer the caller a wr
 - For a call with several items, name each one in the summary with its options and the quantity the caller wanted, for example "36 of the Prism mesh chair in black without a headrest". Quantities are fine in the summary; prices are not.
 - Write the summary in plain sentences, as a short note from the shop: what they were looking for, what you recommended and why, and anything they said they would do next. Use only facts the tools gave you. Do NOT write prices, links or lists of products in the summary: the email lists every product you pass in product_ids underneath it, with its photograph, link and price, set out by the shop. Mention a product by name in the summary and leave the price to that list. The way you speak numbers aloud is for the phone only: in the written summary use figures and numeric dates, for example "Wednesday the 21st of October", never "the twenty-first".
 - Pass in product_ids the id of every product you recommended or discussed. If the caller asked about one particular variation (a colour, size or back height), pass the id of THAT variation, from matchingVariations in get_product, not the id of the product, so the email links and prices exactly what they asked about. Do not write web addresses yourself.
+- If a quote was emailed this call (save_quote), it already carries the basket's items, prices and link. Use email_summary only for OTHER things the caller wanted in writing that the quote does not answer, such as answers about delivery, returns or products they did not buy. Do not mention the quoted items in it, do not pass their ids in product_ids, and if there is nothing else to say, do not send one.
 - NEVER put order details in this email: no order numbers, statuses, delivery progress, addresses or phone numbers. It is for product and shop information only. If they want their order link, use email_order_link instead.
 - If the tool says it cannot send, apologise and offer a callback. Tell the caller it may take a minute or two to arrive and to check their junk folder. Do not promise anything else in the email.`,
 
@@ -324,7 +329,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   email_summary: {
     description:
-      "Email the caller a written note of what you discussed (product advice, answers to their questions), with the shop's own links to any products you name. Only after the caller has said they want one. Never include order details. With an order matched this call the email goes to the address on the order; otherwise pass the address the caller gave, read back and confirmed.",
+      "Email the caller a written note of what you discussed (product advice, answers to their questions), with the shop's own links to any products you name. Only after the caller has said they want one. Never include order details. Once a quote has been emailed (save_quote), only for other questions the quote does not answer: never to resend the quote or its items. With an order matched this call the email goes to the address on the order; otherwise pass the address the caller gave, read back and confirmed.",
     properties: {
       email: textProperty("The caller's email address, confirmed by reading it back. Omit if an order has been looked up this call, unless its orders carry several addresses: then the one the caller chose, exactly as listed in emailsOnFile."),
       name: textProperty("The caller's first name for the greeting, if they gave it. Omit otherwise."),
@@ -351,7 +356,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   build_basket: {
     description:
-      "Put what the caller wants to buy into a basket they can open on any phone or computer and check out from. Pass EVERY line agreed so far each time (it replaces the last version): the exact variation id from matchingVariations in get_product, or the product id for a product with no options, and the quantity. Returns each line's name and options so you can confirm the list, or tells you which lines still need options choosing. Then offer to send it with send_text.",
+      "Put what the caller wants to buy into a basket they can open on any phone or computer and check out from. Pass EVERY line agreed so far each time (it replaces the last version): the exact variation id from matchingVariations in get_product, or the product id for a product with no options, and the quantity. Returns each line's name and options so you can confirm the list, or tells you which lines still need options choosing, and whether the shop saves baskets as quotes (quotesAvailable). Then offer to email it as a quote (save_quote) where it does, else to text it (send_text).",
     properties: {
       items: {
         type: 'array',
@@ -369,9 +374,18 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
     },
     required: ['items'],
   },
+  save_quote: {
+    description:
+      "Save the basket built with build_basket as a quote in the caller's name, which the shop then emails to them with its quote number and a link that opens the basket. Only when build_basket said quotesAvailable, the list is complete, and the caller has given their full name and an email address you have read back and they have confirmed. The shop sends the quote: never email it again yourself. Returns the quote number to tell the caller.",
+    properties: {
+      name: textProperty("The caller's full name, for the quote. Omit only if an order was matched this call and the caller agreed to use the details on it."),
+      email: textProperty("The caller's email address, confirmed by reading it back. Omit only if an order was matched this call and the caller agreed to use the details on it."),
+    },
+    required: [],
+  },
   send_text: {
     description:
-      "Text the caller, at the number they are calling from and nowhere else: the basket link (what 'basket'), their order page link (what 'order_link', only after an order is matched this call), or a short note of what you discussed with links to up to three products (what 'summary'). Says if the number cannot take texts, so you can offer email instead.",
+      "Text the caller, at the number they are calling from and nowhere else: the basket link, or the quote's link once save_quote has saved one (what 'basket'), their order page link (what 'order_link', only after an order is matched this call), or a short note of what you discussed with links to up to three products (what 'summary'). Says if the number cannot take texts, so you can offer email instead.",
     properties: {
       what: { type: 'string', enum: ['basket', 'order_link', 'summary'], description: "basket, order_link or summary." },
       note: textProperty('For summary: two or three plain sentences of what was discussed. No prices, no order details, no web addresses. For basket: optional, one sentence to go above the link.'),

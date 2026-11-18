@@ -183,6 +183,9 @@ export type AiCallSettings = {
   liveVoice: string
   liveBackendModel: string
   liveRegion: LiveRegion
+  /** Play a quiet typing loop to the caller while the thinking model works.
+   *  Puts GPT-Live calls through a Twilio conference (lib/live-conference.ts). */
+  liveTypingSound: boolean
 }
 
 type Row = Record<string, unknown>
@@ -248,6 +251,7 @@ export async function getSettings(): Promise<AiCallSettings> {
     liveVoice: str(row?.live_voice) ?? DEFAULT_LIVE_VOICE,
     liveBackendModel: str(row?.live_backend_model) ?? DEFAULT_LIVE_BACKEND_MODEL,
     liveRegion: isLiveRegion(row?.live_region) ? row.live_region : 'global',
+    liveTypingSound: row?.live_typing_sound === true,
   }
 }
 
@@ -289,6 +293,7 @@ export type SettingsPatch = {
   liveVoice?: string
   liveBackendModel?: string
   liveRegion?: LiveRegion
+  liveTypingSound?: boolean
 }
 
 /** Written a column at a time: every value is optional, and a template literal
@@ -356,6 +361,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<void> {
   }
   if (patch.liveRegion !== undefined) {
     await prisma.$executeRaw`UPDATE "acall_settings" SET "live_region" = ${patch.liveRegion} WHERE "id" = 'singleton'`
+  }
+  if (patch.liveTypingSound !== undefined) {
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "live_typing_sound" = ${patch.liveTypingSound} WHERE "id" = 'singleton'`
   }
   await prisma.$executeRaw`UPDATE "acall_settings" SET "updated_at" = CURRENT_TIMESTAMP WHERE "id" = 'singleton'`
 }

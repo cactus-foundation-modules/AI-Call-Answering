@@ -5,6 +5,7 @@ import { getSiteUrl } from '@/lib/config/env'
 import { ElevenLabsError, REGISTER_CALL_TIMEOUT_MS, innerTwiml, isOutOfCredit, registerCall } from './elevenlabs'
 import { callCandidates, isKeyProblem, knownOutOfCredit, listFallbackKeys, markKeyRefused, orderCandidates } from './fallback-keys'
 import { liveSipUri } from './live-config'
+import { addAssistantLeg, assistantLegForm, conferenceTwiml, liveLegPath, regionForNumber } from './live-conference'
 import { getAssignmentForNumber, shouldAnswer } from './numbers'
 import { getSettings, liveReady, type AiCallSettings } from './settings'
 
@@ -56,8 +57,41 @@ export async function liveCallTwiml(settings: AiCallSettings, call: Pick<Inbound
     return null
   }
   const action = `${getSiteUrl()}${callEndedPath()}`
+  const timeLimitSeconds = Math.round(settings.maxCallMinutes * 60) + 120
+  if (settings.liveTypingSound) {
+    const conferenced = await conferencedLiveTwiml(call, uri, action, timeLimitSeconds)
+    if (conferenced) return conferenced
+  }
   // answerOnBridge: the caller keeps hearing ringing until the assistant picks up.
-  return `<Dial action="${escapeXml(action)}" method="POST" answerOnBridge="true" timeLimit="${Math.round(settings.maxCallMinutes * 60) + 120}"><Sip>${escapeXml(uri)}</Sip></Dial>`
+  return `<Dial action="${escapeXml(action)}" method="POST" answerOnBridge="true" timeLimit="${timeLimitSeconds}"><Sip>${escapeXml(uri)}</Sip></Dial>`
+}
+
+/** With the typing sound on: OpenAI is dialled into a conference first, then
+ *  the caller is sent into it (lib/live-conference.ts says why). If Twilio will
+ *  not add OpenAI, null, and the call goes through the plain way instead, with
+ *  no typing sound but nothing else lost. */
+async function conferencedLiveTwiml(
+  call: Pick<InboundCallContext, 'callSid' | 'from' | 'to'>,
+  uri: string,
+  actionUrl: string,
+  timeLimitSeconds: number,
+): Promise<string | null> {
+  try {
+    const region = await regionForNumber(call.to)
+    const callback = new URL(`${getSiteUrl()}${liveLegPath()}`)
+    callback.searchParams.set('caller', call.callSid)
+    callback.searchParams.set('region', region)
+    await addAssistantLeg(region, call.callSid, assistantLegForm({
+      sipUri: uri,
+      from: call.from || call.to,
+      statusCallbackUrl: callback.toString(),
+      timeLimitSeconds,
+    }))
+    return conferenceTwiml({ callSid: call.callSid, actionUrl, timeLimitSeconds })
+  } catch (error) {
+    console.error('[ai-call-answering] could not join the call through a conference, connecting it straight through instead', error)
+    return null
+  }
 }
 
 export const aiInboundCallHandler: InboundCallHandler = async (call: InboundCallContext) => {

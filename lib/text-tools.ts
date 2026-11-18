@@ -7,13 +7,14 @@ import { productUrl } from '@/modules/shop/lib/product-url'
 import type { CallRecord } from './calls'
 import { pickOrderForLink } from './order-link'
 import {
-  basketUrl,
+  basketLinkFor,
   checkBasketLines,
   getCallBasket,
   normaliseBasketItems,
   saveCallBasket,
   type BasketItemInput,
 } from './phone-basket'
+import { quotesAvailable } from './quote-saver'
 import { getSettings } from './settings'
 import { composeText, textCaller } from './sms'
 
@@ -39,16 +40,23 @@ export async function buildBasket(call: CallRecord, items: BasketItemInput[]): P
     return { ok: false, message: 'None of those are products the shop sells right now. Search again.' }
   }
   await saveCallBasket(call.id, checked.lines.map(({ productId, quantity }) => ({ productId, quantity })))
+  const quotes = await quotesAvailable()
   return {
     ok: true,
     lines: checked.lines.map((line) => ({ name: line.name, options: line.options, quantity: line.quantity })),
     lineCount: checked.lines.length,
+    quotesAvailable: quotes,
     ...(checked.unknown.length > 0 ? { skipped: checked.unknown.length } : {}),
     message: [
       `The basket is saved with ${checked.lines.length} line${checked.lines.length === 1 ? '' : 's'}.`,
       checked.unknown.length > 0 ? `${checked.unknown.length} id(s) were not products on sale and were left out: tell the caller which item could not be added.` : '',
-      'Offer to text them the link (send_text with what "basket"). Prices, delivery and the total are worked out on the basket page, so quote only totals you already got from get_product.',
-      'If they add or change anything later, call build_basket again with the WHOLE list: a link already sent opens the new version.',
+      quotes
+        ? 'This shop saves baskets as quotes. Once the list is complete, offer to email it to them as a quote: ask for their full name and email address, read the email back one character at a time, and once they confirm call save_quote. The quote is emailed by the shop, so do not email it yourself.'
+        : 'Offer to text them the link (send_text with what "basket").',
+      'Prices, delivery and the total are worked out on the basket page, so quote only totals you already got from get_product.',
+      quotes
+        ? 'If they add or change anything, call build_basket again with the WHOLE list before saving the quote.'
+        : 'If they add or change anything later, call build_basket again with the WHOLE list: a link already sent opens the new version.',
     ].filter(Boolean).join(' '),
   }
 }
@@ -82,7 +90,12 @@ export async function sendText(
     if (!basket || basket.lines.length === 0) {
       return { ok: false, message: 'There is no basket on this call yet. Build it first with build_basket.' }
     }
-    body = composeText(input.note || 'Here is the basket we put together on the phone. Open it to see prices and delivery and check out.', [basketUrl(basket.token)], signOff)
+    // Once saved as a quote, the text carries the quote's link, which opens the
+    // same basket: one thing for the caller to keep, not two.
+    const fallback = basket.quote
+      ? `Here is quote ${basket.quote.number}, from our call. Open it to see prices and delivery and check out.`
+      : 'Here is the basket we put together on the phone. Open it to see prices and delivery and check out.'
+    body = composeText(input.note || fallback, [basketLinkFor(basket)], signOff)
   } else if (input.what === 'order_link') {
     if (call.verifiedOrders.length === 0) {
       return { ok: false, message: 'No order has been checked on this call yet. Check the order first.' }
@@ -106,5 +119,5 @@ export async function sendText(
  *  on a landline still gets the link. Null when there is none. */
 export async function basketLinkForEmail(call: CallRecord): Promise<string | null> {
   const basket = await getCallBasket(call.id)
-  return basket && basket.lines.length > 0 ? basketUrl(basket.token) : null
+  return basket && basket.lines.length > 0 ? basketLinkFor(basket) : null
 }

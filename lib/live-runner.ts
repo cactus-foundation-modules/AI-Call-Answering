@@ -4,7 +4,10 @@ import { completeCall, getCall, recordUsage, type CallRecord } from './calls'
 import { isToolName } from './agent-config'
 import { attachUrl, hangUpCall, summariseCall } from './openai-live'
 import { fallbackSummary } from './post-call'
+import { addTypingLeg, findConference, regionForNumber, removeLeg, typingApp } from './live-conference'
 import { LiveSession, wrapUpInstruction } from './live-session'
+import { TypingPlayer } from './typing-player'
+import type { TwilioRegion } from '@/modules/twilio/lib/twilio'
 import { announceCallback, runTool } from './tool-handlers'
 import { recordToolCall, toolLogEntry } from './tool-log'
 import { fileTranscriptGaps } from './unanswered'
@@ -38,6 +41,8 @@ export type LiveRunInput = {
   greeting: string
   backendModel: string
   maxCallMinutes: number
+  /** The site has the typing sound on, so the call should be in a conference. */
+  typingSound: boolean
 }
 
 /** Runs one tool as the ElevenLabs route does: same handlers, same log, same
@@ -69,6 +74,46 @@ async function runLoggedTool(call: CallRecord, sessionId: string, name: string, 
     toolLogEntry({ tool: name, body, result, ms: Date.now() - startedAt, failed }),
   ).catch((error: unknown) => console.error(`${LOG} could not log a tool call`, error))
   return JSON.stringify(result)
+}
+
+/** The typing sound for one call. Where the call's conference is (its Twilio
+ *  region and id) is looked up as the call starts, so the first lookup does not
+ *  wait on it. The conference may not count as running for a moment after
+ *  OpenAI answers, so a miss is asked again at the next lookup; only a find is
+ *  kept. A call that is not in a conference simply gets no typing. */
+function typingFor(call: CallRecord): TypingPlayer {
+  const log = (message: string, detail?: unknown) => console.error(`${LOG} ${message}`, detail ?? '')
+  type Place = { region: TwilioRegion; conferenceSid: string }
+  let found: Place | null = null
+  let looking: Promise<Place | null> | null = null
+  const place = (): Promise<Place | null> => {
+    if (found) return Promise.resolve(found)
+    looking ??= (async (): Promise<Place | null> => {
+      const region = await regionForNumber(call.toNumber)
+      // Made or found now, so the first lookup does not wait for it either.
+      void typingApp(region).catch((error: unknown) => log('could not set up the typing sound app', error))
+      const conferenceSid = await findConference(region, call.callSid)
+      if (!conferenceSid) return null
+      found = { region, conferenceSid }
+      return found
+    })().catch((error: unknown) => {
+      log('could not find the call\'s conference', error)
+      return null
+    }).finally(() => { looking = null })
+    return looking
+  }
+  void place()
+  return new TypingPlayer({
+    start: async () => {
+      const at = await place()
+      if (!at) throw new Error(`GPT-Live call ${call.callSid} is not in a running conference`)
+      return addTypingLeg(at.region, at.conferenceSid, call.callSid, call.toNumber)
+    },
+    stop: async (leg) => {
+      if (found) await removeLeg(found.region, leg)
+    },
+    log,
+  })
 }
 
 /** Writes the finished call up: transcript, length, overview, usage, and the
@@ -105,6 +150,7 @@ export async function runLiveCall(input: LiveRunInput): Promise<void> {
   const hangUp = () => hangUpCall(input.apiKey, input.sessionId)
   let socket: WebSocket | null = null
   const timers: Array<ReturnType<typeof setTimeout>> = []
+  const typing = input.typingSound ? typingFor(input.call) : null
   const session = new LiveSession({
     send: (event) => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event))
@@ -112,6 +158,8 @@ export async function runLiveCall(input: LiveRunInput): Promise<void> {
     runTool: (name, args) => runLoggedTool(input.call, input.sessionId, name, args),
     hangUp,
     log: (message, detail) => console.error(`${LOG} ${message}`, detail ?? ''),
+    workingStarted: typing ? () => typing.start() : undefined,
+    workingStopped: typing ? () => typing.stop() : undefined,
   }, input.greeting)
 
   try {
@@ -160,6 +208,8 @@ export async function runLiveCall(input: LiveRunInput): Promise<void> {
   } finally {
     for (const timer of timers) clearTimeout(timer)
     session.dispose()
+    // dispose() has asked for the typing to stop; let that request finish.
+    await typing?.idle().catch(() => undefined)
     try {
       await fileCall(input, session, startedAt)
     } catch (error) {

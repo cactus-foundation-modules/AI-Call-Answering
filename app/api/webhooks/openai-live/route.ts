@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
     language: settings.language,
     voice: settings.liveVoice,
     backendModel: settings.liveBackendModel,
+    typingSound: settings.liveTypingSound,
   }
   try {
     await acceptCall(apiKey, incoming.sessionId, buildAcceptBody(inputs))
@@ -87,6 +88,7 @@ export async function POST(request: NextRequest) {
     greeting: liveGreetingInstruction(inputs),
     backendModel: settings.liveBackendModel,
     maxCallMinutes: settings.maxCallMinutes,
+    typingSound: settings.liveTypingSound,
   }))
   return NextResponse.json({ ok: true, accepted: true })
 }

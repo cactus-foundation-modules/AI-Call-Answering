@@ -25,6 +25,7 @@ import { MAX_BASKET_LINES } from './phone-basket'
 import { deliveryToPostcode } from './postcode-delivery'
 import { productReviews, searchGuides, searchPages } from './site-content'
 import { buildBasket, sendText } from './text-tools'
+import { saveBasketQuote } from './quote-tool'
 import { recordUnanswered } from './unanswered'
 import type { ToolName } from './agent-config'
 
@@ -97,6 +98,10 @@ const BasketInput = CallIdentity.extend({
     product_id: z.string().trim().min(1).max(100),
     quantity: z.number().positive().max(100_000),
   })).min(1).max(MAX_BASKET_LINES),
+})
+const QuoteInput = CallIdentity.extend({
+  name: z.string().trim().max(120).optional(),
+  email: z.string().trim().max(320).optional(),
 })
 const TextInput = CallIdentity.extend({
   what: z.enum(['basket', 'order_link', 'summary']),
@@ -364,6 +369,14 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const call = await resolveCall(input.data)
       if (!call) return { result: { ok: false, message: 'Baskets only work on a live phone call.' }, callbackSaved: null }
       return { result: await buildBasket(call, input.data.items), callbackSaved: null }
+    }
+    case 'save_quote': {
+      const input = QuoteInput.safeParse(body)
+      if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
+      const call = await resolveCall(input.data)
+      if (!call) return { result: { ok: false, message: 'Quotes only work on a live phone call.' }, callbackSaved: null }
+      const result = await saveBasketQuote(call, { name: blankToNull(input.data.name), email: blankToNull(input.data.email) })
+      return { result, callbackSaved: null }
     }
     case 'send_text': {
       const input = TextInput.safeParse(body)

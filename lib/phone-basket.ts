@@ -103,25 +103,78 @@ export function basketUrl(token: string, siteUrl: string = getSiteUrl()): string
 }
 
 /** Saves the call's basket, replacing any earlier version and keeping its
- *  token, so a link already sent still opens the latest list. */
+ *  token, so a link already sent still opens the latest list. A quote saved
+ *  from the earlier lines no longer matches once they change, so it is let go:
+ *  the links fall back to the basket until the new lines are saved as a quote. */
 export async function saveCallBasket(callId: string, lines: BasketLine[]): Promise<{ token: string }> {
   const token = randomBytes(18).toString('base64url')
   const json = JSON.stringify(lines)
   const rows = await prisma.$queryRaw<Array<{ token: string }>>`
     INSERT INTO "acall_baskets" ("call_id", "token", "lines")
     VALUES (${callId}, ${token}, ${json}::jsonb)
-    ON CONFLICT ("call_id") DO UPDATE SET "lines" = EXCLUDED."lines", "updated_at" = CURRENT_TIMESTAMP
+    ON CONFLICT ("call_id") DO UPDATE SET
+      "lines" = EXCLUDED."lines",
+      "quote_id" = CASE WHEN "acall_baskets"."lines" = EXCLUDED."lines" THEN "acall_baskets"."quote_id" END,
+      "quote_number" = CASE WHEN "acall_baskets"."lines" = EXCLUDED."lines" THEN "acall_baskets"."quote_number" END,
+      "quote_url" = CASE WHEN "acall_baskets"."lines" = EXCLUDED."lines" THEN "acall_baskets"."quote_url" END,
+      "quote_emailed" = "acall_baskets"."lines" = EXCLUDED."lines" AND "acall_baskets"."quote_emailed",
+      "updated_at" = CURRENT_TIMESTAMP
     RETURNING "token"
   `
   return { token: rows[0]?.token ?? token }
 }
 
-export async function getCallBasket(callId: string): Promise<{ token: string; lines: BasketLine[] } | null> {
-  const rows = await prisma.$queryRaw<Array<{ token: string; lines: unknown }>>`
-    SELECT "token", "lines" FROM "acall_baskets" WHERE "call_id" = ${callId} LIMIT 1
+/** The quote a phone basket was saved as, where quote-for-shop is installed. */
+export type BasketQuote = { id: string; number: string; url: string; emailed: boolean }
+
+export type CallBasket = {
+  token: string
+  lines: BasketLine[]
+  /** The latest quote saved from this basket, or null for none. */
+  quote: BasketQuote | null
+  quotesSaved: number
+}
+
+export async function getCallBasket(callId: string): Promise<CallBasket | null> {
+  const rows = await prisma.$queryRaw<Array<{
+    token: string
+    lines: unknown
+    quote_id: string | null
+    quote_number: string | null
+    quote_url: string | null
+    quote_emailed: boolean
+    quotes_saved: number
+  }>>`
+    SELECT "token", "lines", "quote_id", "quote_number", "quote_url", "quote_emailed", "quotes_saved"
+    FROM "acall_baskets" WHERE "call_id" = ${callId} LIMIT 1
   `
   const row = rows[0]
-  return row ? { token: row.token, lines: readLines(row.lines) } : null
+  if (!row) return null
+  return {
+    token: row.token,
+    lines: readLines(row.lines),
+    quote: row.quote_id && row.quote_url
+      ? { id: row.quote_id, number: row.quote_number ?? '', url: row.quote_url, emailed: row.quote_emailed }
+      : null,
+    quotesSaved: row.quotes_saved,
+  }
+}
+
+/** Records the quote the basket was just saved as. The latest one wins: a
+ *  basket changed and saved again is a new quote, and that is the one to send. */
+export async function recordBasketQuote(callId: string, quote: BasketQuote): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "acall_baskets"
+    SET "quote_id" = ${quote.id}, "quote_number" = ${quote.number}, "quote_url" = ${quote.url},
+        "quote_emailed" = ${quote.emailed}, "quotes_saved" = "quotes_saved" + 1, "updated_at" = CURRENT_TIMESTAMP
+    WHERE "call_id" = ${callId}
+  `
+}
+
+/** The link a caller should be sent for this basket: the quote's page once one
+ *  is saved (it restores the basket too), else the phone basket link. */
+export function basketLinkFor(basket: CallBasket): string {
+  return basket.quote?.url ?? basketUrl(basket.token)
 }
 
 function readLines(value: unknown): BasketLine[] {

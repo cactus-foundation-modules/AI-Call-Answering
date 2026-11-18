@@ -65,6 +65,7 @@ type State = {
   liveVoice: string
   liveBackendModel: string
   liveRegion: LiveRegion
+  liveTypingSound: boolean
   liveReady: boolean
   liveVoices: LiveVoice[]
   liveBackendModels: Choice[]
@@ -93,6 +94,7 @@ type Draft = {
   liveVoice: string
   liveBackendModel: string
   liveRegion: LiveRegion
+  liveTypingSound: boolean
 }
 
 type NumberRow = {
@@ -148,6 +150,7 @@ function draftOf(state: State): Draft {
     liveVoice: state.liveVoice,
     liveBackendModel: state.liveBackendModel,
     liveRegion: state.liveRegion,
+    liveTypingSound: state.liveTypingSound,
   }
 }
 
@@ -248,6 +251,7 @@ function AssistantSection() {
       liveVoice: draft.liveVoice,
       liveBackendModel: draft.liveBackendModel,
       liveRegion: draft.liveRegion,
+      liveTypingSound: draft.liveTypingSound,
     }
     if (draft.apiKey.trim()) body.apiKey = draft.apiKey.trim()
     if (draft.openaiApiKey.trim()) body.openaiApiKey = draft.openaiApiKey.trim()
@@ -465,6 +469,18 @@ function AssistantSection() {
               <select value={draft.liveRegion} style={{ maxWidth: '16rem' }} onChange={(e) => set('liveRegion', e.target.value === 'eu' ? 'eu' : e.target.value === 'in' ? 'in' : 'global')}>
                 {saved.liveRegions.map((region) => <option key={region.id} value={region.id}>{region.label}</option>)}
               </select>
+            </div>
+            <div className="field">
+              <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input type="checkbox" checked={draft.liveTypingSound} onChange={(e) => set('liveTypingSound', e.target.checked)} />
+                Typing sound while it looks things up
+              </label>
+              <p className="field-hint">
+                The caller hears quiet keyboard tapping while the thinking model checks an order or the shop, as ElevenLabs
+                callers do, instead of silence. Calls are then joined through a Twilio conference rather than connected
+                straight through, so the caller hears a moment of quiet instead of ringing before the greeting. New: ring
+                the number once after switching it on.
+              </p>
             </div>
           </div>
         )}

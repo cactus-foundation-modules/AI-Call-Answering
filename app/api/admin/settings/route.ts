@@ -84,6 +84,7 @@ async function currentState() {
     liveVoice: settings.liveVoice,
     liveBackendModel: settings.liveBackendModel,
     liveRegion: settings.liveRegion,
+    liveTypingSound: settings.liveTypingSound,
     liveReady: liveReady(settings),
     liveVoices: LIVE_VOICE_CHOICES,
     liveBackendModels: LIVE_BACKEND_MODEL_CHOICES,
@@ -119,6 +120,7 @@ const FIELD_LABELS: Record<string, string> = {
   liveVoice: 'GPT-Live voice',
   liveBackendModel: 'GPT-Live thinking model',
   liveRegion: 'GPT-Live region',
+  liveTypingSound: 'Typing sound',
 }
 
 /** Spells out which field failed and why, instead of a blanket "did not make sense". */
@@ -165,6 +167,7 @@ const Body = z.object({
   liveVoice: z.string().trim().min(1).max(128).optional(),
   liveBackendModel: z.string().trim().min(1).max(100).optional(),
   liveRegion: z.enum(LIVE_REGIONS).optional(),
+  liveTypingSound: z.boolean().optional(),
 })
 
 export async function PATCH(request: NextRequest) {

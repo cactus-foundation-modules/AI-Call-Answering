@@ -130,3 +130,12 @@ describe('putting the call through', () => {
     expect(sipHeader(headers, CALL_SIGNATURE_HEADER)).toBe('')
   })
 })
+
+describe('the wait line and the typing sound', () => {
+  it('tells the voice what the caller hears while the backend works', () => {
+    expect(buildVoiceInstructions(inputs)).toContain('There is no sound on the line while the backend works')
+    const withTyping = buildVoiceInstructions({ ...inputs, typingSound: true })
+    expect(withTyping).toContain('The caller hears quiet keyboard typing while the backend works, but still as you hand a question over, say one short line')
+    expect(withTyping).not.toContain('no sound on the line')
+  })
+})

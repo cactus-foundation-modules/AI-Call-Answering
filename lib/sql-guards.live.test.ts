@@ -57,6 +57,7 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
     calls: typeof import('./calls')
     provider: typeof import('./conversation-provider')
     postCall: typeof import('./post-call')
+    basket: typeof import('./phone-basket')
   }
   let mod: Loaded
   let vps: typeof import('@/lib/backup/vps-database')
@@ -79,6 +80,7 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
       calls: await import('./calls'),
       provider: await import('./conversation-provider'),
       postCall: await import('./post-call'),
+      basket: await import('./phone-basket'),
     }
 
     for (let attempt = 0; ; attempt++) {
@@ -298,5 +300,31 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
     await mod.calls.completeCall(claimed!.id, { conversationId: 'live_1', durationSeconds: 61, summary: 'Asked about chairs.', transcript: [], startedAt: null })
     await mod.prisma.prisma.$executeRawUnsafe(`UPDATE acall_calls SET live_session_id = NULL WHERE call_sid = 'CALIVE'`)
     expect(await mod.calls.claimLiveCall('CALIVE', 'live_3')).toBeNull()
+  })
+
+  it('keeps a phone basket, records its quote, and lets the quote go when the lines change', async () => {
+    await mod.calls.openCall({ callSid: 'CABASKET', fromNumber: '+447700900124', toNumber: '+441234567890' })
+    const call = await mod.calls.findCall({ callSid: 'CABASKET' })
+    const lines = [{ productId: 'p1', quantity: 2 }, { productId: 'p2', quantity: 1 }]
+    const { token } = await mod.basket.saveCallBasket(call!.id, lines)
+    expect(await mod.basket.getCallBasket(call!.id)).toEqual({ token, lines, quote: null, quotesSaved: 0 })
+
+    await mod.basket.recordBasketQuote(call!.id, { id: 'q1', number: 'QUO-1', url: 'https://shop.test/quote/AB3XY9', emailed: true })
+    const saved = await mod.basket.getCallBasket(call!.id)
+    expect(saved?.quote).toEqual({ id: 'q1', number: 'QUO-1', url: 'https://shop.test/quote/AB3XY9', emailed: true })
+    expect(saved?.quotesSaved).toBe(1)
+
+    // The same lines again (a retried tool call): the quote still stands.
+    expect((await mod.basket.saveCallBasket(call!.id, lines)).token).toBe(token)
+    expect((await mod.basket.getCallBasket(call!.id))?.quote?.number).toBe('QUO-1')
+
+    // Different lines: the quote no longer describes the basket, so it is let go,
+    // the token is kept and the count of quotes saved is not reset.
+    await mod.basket.saveCallBasket(call!.id, [...lines, { productId: 'p3', quantity: 4 }])
+    const changed = await mod.basket.getCallBasket(call!.id)
+    expect(changed).toMatchObject({ token, quote: null, quotesSaved: 1 })
+    expect(changed?.lines).toHaveLength(3)
+
+    expect(await mod.basket.openBasketByToken(token)).toHaveLength(3)
   })
 })

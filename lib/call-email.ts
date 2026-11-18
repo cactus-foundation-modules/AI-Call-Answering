@@ -5,7 +5,7 @@ import { renderProductTable } from '@/modules/unified-inbox/lib/products/render'
 import { resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
 import { toProductRefs } from './product-queries'
-import { basketUrl, getCallBasket } from './phone-basket'
+import { basketUrl, getCallBasket, type CallBasket } from './phone-basket'
 import { getSettings } from './settings'
 import { isPlausibleEmail } from './text'
 import { askWhichEmailMessage, chooseOrderEmail } from './email-choice'
@@ -85,12 +85,27 @@ export function pickRecipient(
 }
 
 /** A call with a phone basket gets its link in the email too, so a caller on a
- *  landline (who cannot be texted) still leaves with something to act on. */
-async function basketParagraph(callId: string): Promise<string> {
-  const basket = await getCallBasket(callId)
+ *  landline (who cannot be texted) still leaves with something to act on. A
+ *  basket already emailed as a quote is left out: the quote module sent it, and
+ *  the caller is not to get it twice. A quote saved but not emailed is linked
+ *  instead of the basket, since it opens the same lines. */
+export function basketParagraph(basket: CallBasket | null): string {
   if (!basket || basket.lines.length === 0) return ''
+  if (basket.quote?.emailed) return ''
+  if (basket.quote) {
+    const label = basket.quote.number ? `Open quote ${basket.quote.number}` : 'Open your quote'
+    return `<p><a href="${escapeHtml(basket.quote.url)}">${escapeHtml(label)}</a> to see prices and delivery and check out.</p>`
+  }
   const url = basketUrl(basket.token)
   return `<p><a href="${escapeHtml(url)}">Open the basket we put together on the phone</a> to see prices and delivery and check out.</p>`
+}
+
+/** The products to list under the summary. Once a quote has been emailed, its
+ *  lines are left out: they are on the quote already. */
+export function productsForSummary(productIds: readonly string[], basket: CallBasket | null): string[] {
+  if (!basket?.quote?.emailed) return [...productIds]
+  const quoted = new Set(basket.lines.map((line) => line.productId))
+  return productIds.filter((id) => !quoted.has(id))
 }
 
 export type SummaryInput = {
@@ -121,14 +136,15 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   if (!summary) return { ok: false, message: 'There was nothing to put in the email. Write a short note of what was discussed and retry.' }
 
   const settings = await getSettings()
-  const refs = await toProductRefs(input.productIds.slice(0, MAX_PRODUCTS_PER_EMAIL))
+  const basket = await getCallBasket(call.id)
+  const refs = await toProductRefs(productsForSummary(input.productIds, basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
   const resolved = await resolveProducts(refs)
   const listing = renderProductTable(resolved.map((entry) => entry.choice))
 
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
     customerName: input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || 'there',
     subject: cleanSubject(input.subject),
-    summaryHtml: textToHtml(summary) + (await basketParagraph(call.id)),
+    summaryHtml: textToHtml(summary) + basketParagraph(basket),
     productsHtml: listing,
     hasProducts: listing ? 'true' : '',
     signatureHtml: signatureHtml(settings.emailSignature),

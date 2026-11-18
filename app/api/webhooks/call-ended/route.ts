@@ -3,7 +3,8 @@
 // to this route). A call that ran its course just ends. A call ElevenLabs
 // dropped within seconds of connecting - an account out of credit does this -
 // goes to the number's voicemail instead, so the caller is never left with a
-// dead line. Signature-checked; no session, Twilio is the caller.
+// dead line. So does a conferenced GPT-Live call whose OpenAI leg never
+// connected (`?dropped=1`, from webhooks/live-leg). Signature-checked; no session, Twilio is the caller.
 import { NextRequest, NextResponse } from 'next/server'
 import { getSiteUrl } from '@/lib/config/env'
 import { prisma } from '@/lib/db/prisma'
@@ -44,7 +45,10 @@ export async function POST(request: NextRequest) {
       FROM "acall_calls" WHERE "call_sid" = ${params.CallSid ?? ''} LIMIT 1
     `
     const seconds = rows[0] ? Number(rows[0].seconds) : null
-    if (seconds === null || seconds >= DROPPED_WITHIN_SECONDS) return twiml('<Hangup/>')
+    // Sent here by webhooks/live-leg: OpenAI never answered a conferenced call,
+    // however long it rang. The flag is inside the signed address.
+    const neverConnected = request.nextUrl.searchParams.get('dropped') === '1'
+    if (seconds === null || (seconds >= DROPPED_WITHIN_SECONDS && !neverConnected)) return twiml('<Hangup/>')
 
     const keyId = request.nextUrl.searchParams.get('key')
     if (keyId) markKeyRefused(keyId)

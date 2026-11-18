@@ -37,6 +37,10 @@ export type LiveInputs = {
   language: string
   voice: string
   backendModel: string
+  /** The site plays typing to the caller while the backend works
+   *  (lib/live-conference.ts). Changes only what the voice is told the caller
+   *  hears; it says its one short line either way. */
+  typingSound?: boolean
 }
 
 /** The one tool that is not a lookup. GPT-Live has no built-in way to put the
@@ -59,8 +63,11 @@ export function liveGreetingInstruction(input: Pick<LiveInputs, 'greeting' | 'bu
 
 /** The voice model's instructions: who it is, how it sounds, and when to hand
  *  a question to the backend. It never answers a fact on its own. */
-export function buildVoiceInstructions(input: Pick<LiveInputs, 'businessName' | 'language'>): string {
+export function buildVoiceInstructions(input: Pick<LiveInputs, 'businessName' | 'language' | 'typingSound'>): string {
   const name = input.businessName.trim() || 'the business'
+  const waitSound = input.typingSound
+    ? 'The caller hears quiet keyboard typing while the backend works, but still'
+    : 'There is no sound on the line while the backend works, so the caller hears silence unless you speak:'
   const language = languageName(input.language)
   return [
     `You are the telephone assistant for ${name}, an online shop, answering incoming calls. You are an automated assistant, not a person: if anybody asks, say so plainly. Speak ${language}${input.language === 'en' ? ' with a natural British manner and British wording' : ''} unless the caller asks to switch.`,
@@ -86,7 +93,7 @@ Generate <|SpawnThinking|> when:
 Do not generate <|SpawnThinking|> when:
 - the caller is only greeting you, saying thanks, or making small talk;
 - you are asking the caller to repeat something you did not catch.
-Generate <|SpawnThinking|> before giving any answer that depends on backend work. Never guess a fact, a price, a date or what an order says: if the backend has not told you, you do not know it. There is no sound on the line while the backend works, so the caller hears silence unless you speak: as you hand a question over, say one short line such as "let me have a look", "ok, let me check" or "bear with me, I'll pull that up", worded differently each time, and never two in a row. When the backend's answer arrives, say it in your own voice, keeping every number, date and name exactly as given. Never mention an order, or anything about one, that the backend did not give you as the one the caller asked about.`,
+Generate <|SpawnThinking|> before giving any answer that depends on backend work. Never guess a fact, a price, a date or what an order says: if the backend has not told you, you do not know it. ${waitSound} as you hand a question over, say one short line such as "let me have a look", "ok, let me check" or "bear with me, I'll pull that up", worded differently each time, and never two in a row. When the backend's answer arrives, say it in your own voice, keeping every number, date and name exactly as given. Never mention an order, or anything about one, that the backend did not give you as the one the caller asked about.`,
   ].join('\n\n')
 }
 

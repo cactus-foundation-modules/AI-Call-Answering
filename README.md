@@ -51,11 +51,21 @@ If the assistant is off, not set up, or ElevenLabs is slow or down, the call car
 
 The voice list has all 38 built-in GPT-Live voices, grouped with the British and Irish ones first, each with a **Play** button, plus a box for a custom voice id. OpenAI publishes no sample clips, so Play has GPT-Live itself say a line in that voice, with your business name (a few seconds of a billed session the first time; then kept in the site's memory). Play works once an OpenAI key is saved.
 
-The voice model (`gpt-live-1`) holds the conversation and hands each question to the thinking model (GPT-6 Luna by default), which follows the same rules and uses the same tools as the ElevenLabs assistant. There is no typing sound under a lookup on GPT-Live (OpenAI has no setting for one, and the call's audio never passes through the site), so the voice says a short "let me check" line instead. Twilio puts the call through to the project's SIP address (`;transport=tls;secure=true`: GPT-Live refuses a call whose audio is not encrypted with SRTP, and `transport=tls` alone only encrypts the signalling) with a signed reference to the call; the site checks the reference before accepting, so somebody who learns the address cannot borrow another caller's session. The site then keeps a "sideband" connection to the call, runs the tools over it, and files the transcript, an overview written by the thinking model, and what the call used.
+The voice model (`gpt-live-1`) holds the conversation and hands each question to the thinking model (GPT-6 Luna by default), which follows the same rules and uses the same tools as the ElevenLabs assistant. As it hands a question over the voice says a short "let me check" line. Twilio puts the call through to the project's SIP address (`;transport=tls;secure=true`: GPT-Live refuses a call whose audio is not encrypted with SRTP, and `transport=tls` alone only encrypts the signalling) with a signed reference to the call; the site checks the reference before accepting, so somebody who learns the address cannot borrow another caller's session. The site then keeps a "sideband" connection to the call, runs the tools over it, and files the transcript, an overview written by the thinking model, and what the call used.
 
 **Prompt caching.** GPT-Live offers no cache setting of its own, so the module makes the cache work for it: the thinking model's instructions and tool list are built only from the site's settings, never the caller or the time, and in a fixed order, so every lookup of every call starts with the same several thousand tokens. OpenAI then serves them from its cache at a fraction of the price. Each call records how much of its input came from the cache (`acall_calls.usage`), and the server log prints the share when the call is filed.
 
 If OpenAI cannot take the call, or the site cannot attach to it, the call drops within seconds and goes to the number's voicemail, as with ElevenLabs.
+
+**Typing sound (off by default).** OpenAI has no setting for background or thinking audio, and on a straight SIP connection the call's audio never passes the site, so out of the box a GPT-Live caller hears silence while a lookup runs. Tick **Typing sound while it looks things up** and the call is joined through a Twilio conference instead:
+
+- the caller is put into a conference of their own (`acall-<CallSid>`), silent while it waits, no beep, no hold music;
+- OpenAI's SIP address is added as the second participant with the Participants API, with the same `secure=true` address and signed call reference, and its leaving ends the conference (so `end_call` and the time limit end the whole call);
+- while the thinking model works, a third participant plays a quiet keyboard loop as a **coach** of the caller, so only the caller hears it and OpenAI never mistakes it for the caller speaking. It is a TwiML App named `Phone assistant typing sound (<your site>)` that the module makes in your Twilio account the first time it is needed;
+- it starts once a question is handed over and the voice has been quiet for 0.7 s (so it does not sit on top of the "let me check" line), stops on the voice's first word or when the thinking model finishes, and stops for good on hang-up, at the end of the call, or after 20 s on one question. Twilio ends a typing leg after 30 s whatever happens;
+- if OpenAI never answers its leg, Twilio reports it (`webhooks/live-leg`) and the caller is moved on to the same end-of-call check, which sends them to voicemail; if the conference cannot be set up at all, the call is connected straight through as before, just without the sound.
+
+The loop is made by the module itself (`lib/typing-sound.ts`, synthesised from a fixed seed, so there is no recording to licence), 4 seconds of 8 kHz WAV at about -22 dBFS. Trade-offs: the caller hears a moment of silence instead of ringing before the greeting (a conference answers the call when the caller joins it, where the plain dial kept it ringing), each lookup that plays typing is one short extra Twilio call leg, and the typing starts a second or so after the hand-over while Twilio dials the leg in.
 
 ## How it fits together
 
@@ -68,6 +78,8 @@ If OpenAI cannot take the call, or the site cannot attach to it, the call drops 
 | `cron/unanswered` | Mondays: notification with the week's count of unanswered questions. |
 | `cron/resync` | Hourly: pushes a module update to ElevenLabs when only the code changed. Needs `CRON_SECRET`. |
 | `webhooks/post-call` | ElevenLabs delivers the transcript here after hang-up. Checked against its HMAC signature. |
+| `webhooks/live-leg` | GPT-Live with the typing sound: Twilio reports here when OpenAI's conference leg ends (signature-checked). A leg that never connected moves the caller on to voicemail. |
+| `webhooks/typing-sound`, `webhooks/typing-sound-audio` | The TwiML the typing leg runs, and the keyboard loop it plays. Public; the same for every caller. |
 | `webhooks/openai-live` | GPT-Live only: OpenAI announces an incoming call here (Standard Webhooks signature). The site accepts it with the instructions and tools, then runs the call's tools over a sideband connection until it ends. |
 
 Calls from other agents in the same ElevenLabs workspace are ignored.

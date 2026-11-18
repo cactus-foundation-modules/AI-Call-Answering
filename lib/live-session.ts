@@ -66,6 +66,16 @@ export type SessionDeps = {
   hangUpQuietMs?: number
   /** Longest wait for that quiet before hanging up anyway. */
   hangUpMaxWaitMs?: number
+  /** The typing sound (lib/typing-player.ts). Called in strict turns: never
+   *  started twice without a stop between. Absent when the site has it off. */
+  workingStarted?: () => void
+  workingStopped?: () => void
+  /** How long the voice must have been quiet, with a question handed over,
+   *  before the typing starts. Keeps it off the voice's own "let me check". */
+  typingQuietMs?: number
+  /** Longest one stretch of typing plays. A lookup that slow is better met
+   *  with silence than an endless keyboard. */
+  typingMaxMs?: number
 }
 
 /** What the voice is told when the call reaches the site's time limit. */
@@ -84,9 +94,19 @@ export class LiveSession {
   /** Tool calls per delegation, waiting for their results to go back. */
   private readonly pending = new Map<string, Array<{ call: PendingCall; result: Promise<string> }>>()
   private readonly flushTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Delegations whose lookup results have not gone back yet. Each done event
+   *  arrives twice, so the pending list alone cannot say a turn is finished. */
+  private readonly awaitingResults = new Set<string>()
   private greeted = false
   private hangingUp = false
   private lastSpokeAt = 0
+  /** Delegations handed to the thinking model and not yet answered. */
+  private readonly openDelegations = new Set<string>()
+  /** Delegations whose typing ran to the time limit: not started again. */
+  private readonly typingSpent = new Set<string>()
+  private typing = false
+  private typingQuietTimer: ReturnType<typeof setTimeout> | null = null
+  private typingLimitTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly deps: SessionDeps, private readonly greeting: string) {}
 
@@ -123,6 +143,11 @@ export class LiveSession {
         return
       case 'session.output_transcript.delta':
         this.lastSpokeAt = Date.now()
+        // The voice is talking: the answer, or a word while it waits. Either
+        // way the typing stops, and comes back only after a quiet moment if the
+        // question is still being worked on.
+        this.stopTyping()
+        this.scheduleTyping()
         this.transcript.add('assistant', text(event.delta), typeof event.start_ms === 'number' ? event.start_ms : null)
         return
       case 'session.usage.updated':
@@ -132,6 +157,7 @@ export class LiveSession {
         this.usage.seconds = Math.max(this.usage.seconds, count(obj(event.usage)?.seconds))
         this.closeReason = text(event.reason)
         this.closed = true
+        this.endTyping()
         return
       case 'response.event':
         this.handleDelegated(text(event.delegation_id), obj(event.event))
@@ -147,6 +173,11 @@ export class LiveSession {
 
   private handleDelegated(delegationId: string, inner: Json | null): void {
     if (!inner) return
+    const finished = inner.type === 'response.completed' || inner.type === 'response.done'
+    if (!finished && !this.openDelegations.has(delegationId)) {
+      this.openDelegations.add(delegationId)
+      this.scheduleTyping()
+    }
     if (inner.type === 'response.output_item.done') {
       const item = obj(inner.item)
       if (item?.type !== 'function_call') return
@@ -158,6 +189,9 @@ export class LiveSession {
     if (inner.type === 'response.completed' || inner.type === 'response.done') {
       const response = obj(inner.response)
       this.countUsage(text(response?.id), obj(response?.usage))
+      // A response that asked for lookups is not the answer: the results go
+      // back and the model carries on, so the delegation stays open.
+      if (!this.awaitingResults.has(delegationId)) this.closeDelegation(delegationId)
       void this.flush(delegationId)
     }
   }
@@ -177,6 +211,7 @@ export class LiveSession {
     if (list.some((entry) => entry.call.callId === call.callId)) return
     list.push({ call, result: this.execute(call) })
     this.pending.set(delegationId, list)
+    this.awaitingResults.add(delegationId)
     // The completed event is what normally sends the results back. If it never
     // comes, the backend would sit waiting for them for ever, so send anyway.
     const previous = this.flushTimers.get(delegationId)
@@ -208,6 +243,8 @@ export class LiveSession {
     if (!list || list.length === 0) return
     this.pending.delete(delegationId)
     const results = await Promise.all(list.map((entry) => entry.result))
+    // More lookups may have queued for the same delegation while these ran.
+    if (!this.pending.get(delegationId)?.length) this.awaitingResults.delete(delegationId)
     if (this.closed) return
     list.forEach((entry, index) => {
       this.deps.send({
@@ -224,6 +261,7 @@ export class LiveSession {
   scheduleHangUp(): void {
     if (this.hangingUp) return
     this.hangingUp = true
+    this.endTyping()
     const quietMs = this.deps.hangUpQuietMs ?? 2_500
     const maxWaitMs = this.deps.hangUpMaxWaitMs ?? 15_000
     const startedAt = Date.now()
@@ -245,5 +283,76 @@ export class LiveSession {
     for (const timer of this.flushTimers.values()) clearTimeout(timer)
     this.flushTimers.clear()
     this.closed = true
+    this.endTyping()
+  }
+
+  /** Whether the typing sound is playing now. */
+  get typingPlaying(): boolean {
+    return this.typing
+  }
+
+  private closeDelegation(delegationId: string): void {
+    this.openDelegations.delete(delegationId)
+    this.typingSpent.delete(delegationId)
+    if (!this.awaitingAnswer()) {
+      this.clearTypingQuiet()
+      this.stopTyping()
+    }
+  }
+
+  /** A question is with the thinking model, and its typing has not already
+   *  run to the limit. */
+  private awaitingAnswer(): boolean {
+    for (const id of this.openDelegations) if (!this.typingSpent.has(id)) return true
+    return false
+  }
+
+  private clearTypingQuiet(): void {
+    if (this.typingQuietTimer) clearTimeout(this.typingQuietTimer)
+    this.typingQuietTimer = null
+  }
+
+  /** Starts the typing once the voice has been quiet for a moment, if a
+   *  question is still being worked on by then. Each new word from the voice
+   *  restarts the wait. */
+  private scheduleTyping(): void {
+    if (!this.deps.workingStarted || this.closed || this.hangingUp || this.typing) return
+    if (!this.awaitingAnswer()) return
+    this.clearTypingQuiet()
+    const quietMs = this.deps.typingQuietMs ?? 700
+    this.typingQuietTimer = setTimeout(() => {
+      this.typingQuietTimer = null
+      if (this.closed || this.hangingUp || this.typing || !this.awaitingAnswer()) return
+      if (Date.now() - this.lastSpokeAt < quietMs) {
+        this.scheduleTyping()
+        return
+      }
+      this.startTyping()
+    }, quietMs)
+  }
+
+  private startTyping(): void {
+    this.typing = true
+    this.deps.workingStarted?.()
+    this.typingLimitTimer = setTimeout(() => {
+      this.typingLimitTimer = null
+      for (const id of this.openDelegations) this.typingSpent.add(id)
+      this.stopTyping()
+    }, this.deps.typingMaxMs ?? 20_000)
+  }
+
+  private stopTyping(): void {
+    if (!this.typing) return
+    this.typing = false
+    if (this.typingLimitTimer) clearTimeout(this.typingLimitTimer)
+    this.typingLimitTimer = null
+    this.deps.workingStopped?.()
+  }
+
+  /** The call is ending: stop, and start nothing more. */
+  private endTyping(): void {
+    this.clearTypingQuiet()
+    this.stopTyping()
+    this.openDelegations.clear()
   }
 }
