@@ -85,6 +85,10 @@ const SummaryInput = CallIdentity.extend({
   subject: z.string().trim().max(200).optional(),
   summary: z.string().trim().min(1).max(4000),
   product_ids: z.array(z.string().trim().min(1).max(100)).max(MAX_PRODUCTS_PER_EMAIL * 2).optional(),
+  deliveries: z.array(z.object({
+    product_id: z.string().trim().min(1).max(100),
+    service: z.string().trim().min(1).max(120),
+  })).max(MAX_PRODUCTS_PER_EMAIL * 2).optional(),
 })
 const CallbackInput = CallIdentity.extend({
   name: z.string().trim().max(120).optional(),
@@ -97,6 +101,7 @@ const BasketInput = CallIdentity.extend({
   items: z.array(z.object({
     product_id: z.string().trim().min(1).max(100),
     quantity: z.number().positive().max(100_000),
+    delivery: z.string().trim().max(120).optional(),
   })).min(1).max(MAX_BASKET_LINES),
 })
 const QuoteInput = CallIdentity.extend({
@@ -243,6 +248,7 @@ async function runEmailSummary(input: z.infer<typeof SummaryInput>): Promise<Too
       subject: input.subject,
       summary: input.summary,
       productIds: input.product_ids ?? [],
+      deliveries: (input.deliveries ?? []).map((entry) => ({ productId: entry.product_id, service: entry.service })),
     })
     if (!outcome.ok) return outcome
     return { ok: true, message: 'Sent. Tell the caller it is on its way and may take a minute or two, and to check their junk folder if it does not appear. Do not read the address out.' }

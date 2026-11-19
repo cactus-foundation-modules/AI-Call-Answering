@@ -10,6 +10,8 @@ import { getSettings } from './settings'
 import { isPlausibleEmail } from './text'
 import { askWhichEmailMessage, chooseOrderEmail } from './email-choice'
 import { emailsOnOrders, nameOnOrderEmail } from './order-queries'
+import { matchService, timingMenus } from './delivery-choice'
+import type { ProductRef } from '@/modules/unified-inbox/lib/products'
 
 // ---------------------------------------------------------------------------
 // Emailing a caller a written note of what was discussed on the phone.
@@ -114,6 +116,35 @@ export type SummaryInput = {
   subject: string | undefined
   summary: string
   productIds: string[]
+  /** The delivery service the caller chose for a product, in the words get_product used. */
+  deliveries: Array<{ productId: string; service: string }>
+}
+
+/**
+ * The delivery service to print under each product: the one named for it on
+ * this email, else the one its basket line is set to. The inbox prints it from
+ * the shop's own figures and links the product with it chosen; a name that
+ * matches no service of that product is simply left off. Pure but for the
+ * service menus, which are passed in.
+ */
+export function withDeliveries(
+  refs: ProductRef[],
+  named: ReadonlyArray<{ productId: string; service: string }>,
+  basket: CallBasket | null,
+  menus: Map<string, Array<{ key: string; label: string }>>,
+): ProductRef[] {
+  return refs.map((ref) => {
+    const options = menus.get(ref.id) ?? []
+    if (options.length === 0) return ref
+    const said = named.find((entry) => entry.productId === ref.id)?.service
+    if (said) {
+      const match = matchService(said, options)
+      return match.kind === 'match' ? { ...ref, delivery: match.option.key } : ref
+    }
+    const line = basket?.lines.find((entry) => entry.productId === ref.id)
+    const set = line?.meta ? Object.values(line.meta).find((value) => options.some((option) => option.key === value)) : undefined
+    return set ? { ...ref, delivery: set } : ref
+  })
 }
 
 export type SummaryOutcome = { ok: true } | { ok: false; message: string }
@@ -137,7 +168,8 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
 
   const settings = await getSettings()
   const basket = await getCallBasket(call.id)
-  const refs = await toProductRefs(productsForSummary(input.productIds, basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
+  const bare = await toProductRefs(productsForSummary(input.productIds, basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
+  const refs = withDeliveries(bare, input.deliveries, basket, await timingMenus(bare.map((ref) => ref.id)))
   const resolved = await resolveProducts(refs)
   const listing = renderProductTable(resolved.map((entry) => entry.choice))
 

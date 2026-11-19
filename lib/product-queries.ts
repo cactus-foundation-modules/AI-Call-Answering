@@ -22,6 +22,7 @@ import { escapeLike, plainText, searchTokens, truncate } from './text'
 import { expandSearchWords, textHasWord, type Vocabulary } from './spelling'
 import { normaliseSpokenSku, skuMatch, skuSearchDigits, type SkuMatch } from './sku'
 import type { ProductRef } from '@/modules/unified-inbox/lib/products'
+import { loadAccessories, type AccessoryList } from './product-accessories'
 
 // ---------------------------------------------------------------------------
 // What the assistant can find out about the shop's products.
@@ -283,6 +284,9 @@ export type ProductDetail = ProductSummary & {
   deliveryByVariation: SpokenDeliveryService[]
   deliveryNote: string
   priceNote: string
+  /** Products the shop sells alongside this one (a pedestal, a power module, a
+   *  monitor arm), each with its own id for get_product. Null for none. */
+  accessories: AccessoryList | null
 }
 
 export type DeliveryService = DeliveryTimingWords & {
@@ -467,7 +471,7 @@ export async function getProductDetail(
   if (!row) return null
 
   const config = await getShopConfigCached()
-  const [options, spreads, specifications, deliveryServices, forecast, questionsAnswered, found] = await Promise.all([
+  const [options, spreads, specifications, deliveryServices, forecast, questionsAnswered, found, accessories] = await Promise.all([
     loadOptions(productId),
     variationSpreads([productId]),
     loadSpecifications(productId),
@@ -475,6 +479,7 @@ export async function getProductDetail(
     loadDeliveryForecast(productId),
     loadProductFaqs(productId, row.faqs),
     wantedOptions ? findVariations(productId, wantedOptions, config.currencySymbol, quantity) : Promise.resolve(null),
+    loadAccessories(productId, config.currencySymbol).catch(() => null),
   ])
   const spread = spreads.get(productId) ?? null
   const weight = numberOrNull(row.weight)
@@ -512,6 +517,7 @@ export async function getProductDetail(
         ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
         : 'No delivery timing is published for this product. Do not guess one; offer a callback.',
     priceNote: priceNote(spread, found, wantedOptions, priceBasis(config.taxMode), quantity, row.min_order_quantity),
+    accessories,
   }
 }
 

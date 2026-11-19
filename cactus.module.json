@@ -1,6 +1,6 @@
 {
   "name": "ai-call-answering",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "tablePrefix": "acall_",
   "notificationKinds": [
     {"id": "callback", "label": "Callback requests from the phone assistant", "description": "The phone assistant could not help a caller and took their name and email so somebody can get back to them.", "dedupePrefix": "ai-call-answering:callback:"},
@@ -11,7 +11,7 @@
   "requiresModules": [
     {"name": "twilio", "minVersion": "0.1.51"},
     {"name": "shop", "minVersion": "0.1.518"},
-    {"name": "unified-inbox", "minVersion": "0.1.134"}
+    {"name": "unified-inbox", "minVersion": "0.1.152"}
   ],
   "permissions": [
     "ai-call-answering.manage"

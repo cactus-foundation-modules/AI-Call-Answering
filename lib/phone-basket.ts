@@ -25,9 +25,24 @@ export const MAX_LINE_QUANTITY = 10_000
  *  short enough that an old link in somebody's texts goes stale. */
 export const BASKET_LINK_DAYS = 30
 
-export type BasketLine = { productId: string; quantity: number }
+/** One line. `meta` is the shop's own per-line meta, carried into the browser's
+ *  basket and any quote as it is: today, the delivery service the caller chose
+ *  (see delivery-choice.ts). `delivery` is that service's name, for reading the
+ *  basket back to the model; it never reaches the shop. */
+export type BasketLine = { productId: string; quantity: number; meta?: Record<string, string>; delivery?: string }
 
-export type BasketItemInput = { product_id: string; quantity: number }
+export type BasketItemInput = { product_id: string; quantity: number; delivery?: string }
+
+/** The delivery service asked for on each product, first mention winning. */
+export function requestedServices(items: readonly BasketItemInput[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const item of items) {
+    const id = item.product_id.trim()
+    const said = (item.delivery ?? '').trim()
+    if (id && said && !out.has(id)) out.set(id, said)
+  }
+  return out
+}
 
 /** Merges repeats of one product (the caller said "and another ten of those")
  *  and drops anything not a whole positive number. Pure. */
@@ -177,13 +192,28 @@ export function basketLinkFor(basket: CallBasket): string {
   return basket.quote?.url ?? basketUrl(basket.token)
 }
 
-function readLines(value: unknown): BasketLine[] {
+/** Meta as stored: a few short string fields, anything else dropped. */
+function readMeta(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter((entry): entry is [string, string] => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(entry[0]) && typeof entry[1] === 'string' && entry[1].length <= 80)
+    .slice(0, 4)
+  return entries.length > 0 ? Object.fromEntries(entries) : null
+}
+
+export function readLines(value: unknown): BasketLine[] {
   if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
+  return value.flatMap((item): BasketLine[] => {
     const line = item as Record<string, unknown>
-    return typeof line?.productId === 'string' && typeof line.quantity === 'number' && line.quantity > 0
-      ? [{ productId: line.productId, quantity: line.quantity }]
-      : []
+    if (typeof line?.productId !== 'string' || typeof line.quantity !== 'number' || line.quantity <= 0) return []
+    const meta = readMeta(line.meta)
+    const delivery = typeof line.delivery === 'string' && line.delivery.trim() ? line.delivery.trim().slice(0, 80) : null
+    return [{
+      productId: line.productId,
+      quantity: line.quantity,
+      ...(meta ? { meta } : {}),
+      ...(meta && delivery ? { delivery } : {}),
+    }]
   })
 }
 

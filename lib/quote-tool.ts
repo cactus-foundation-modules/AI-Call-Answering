@@ -57,7 +57,7 @@ export async function saveBasketQuote(call: CallRecord, input: { name: string | 
   let saved
   try {
     saved = await saveQuote({
-      lines: basket.lines,
+      lines: basket.lines.map(({ productId, quantity, meta }) => ({ productId, quantity, ...(meta ? { meta } : {}) })),
       customerName: name,
       customerEmail: email,
       customerPhone: quotePhone(call),

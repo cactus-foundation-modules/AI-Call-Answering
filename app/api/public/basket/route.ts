@@ -23,10 +23,13 @@ const BASKET_PATH = '/shop/cart'
 
 /** The phone basket replaces a line already there rather than adding to it:
  *  somebody opening the link twice must not end up with double. Lines already
- *  in the basket that the call did not mention are kept, after the call's. */
-function merge(fromCall: BasketLine[], current: Array<BasketLine & Record<string, unknown>>) {
+ *  in the basket that the call did not mention are kept, after the call's. A
+ *  line's meta (the delivery service the caller chose) goes in as the basket
+ *  page itself would write it; the service's spoken name stays behind. */
+function merge(fromCall: BasketLine[], current: Array<{ productId: string; quantity: number } & Record<string, unknown>>) {
   const called = new Set(fromCall.map((line) => line.productId))
-  return [...fromCall.map((line) => ({ ...line })), ...current.filter((line) => !called.has(line.productId))]
+  const lines = fromCall.map(({ productId, quantity, meta }) => ({ productId, quantity, ...(meta ? { meta: { ...meta } } : {}) }))
+  return [...lines, ...current.filter((line) => !called.has(line.productId))]
 }
 
 export async function GET(request: NextRequest) {

@@ -22,6 +22,8 @@ export const VARIATION_FILLER = new Set([
   'finish', 'finishes', 'frame', 'frames', 'colour', 'colours', 'color', 'colors', 'coloured', 'colored',
   'size', 'sizes', 'cm', 'cms', 'mm', 'centimetre', 'centimetres', 'centimeter', 'centimeters',
   'millimetre', 'millimetres', 'millimeter', 'millimeters', 'by',
+  // Which way a size runs, never a size itself: "140 wide, 60 deep".
+  'wide', 'width', 'deep', 'depth', 'length', 'long',
   'option', 'options', 'version', 'versions', 'variation', 'variations', 'model', 'style',
   'stock', 'available', 'availability', 'which', 'what', 'have', 'got', 'do', 'does', 'there', 'please',
 ])

@@ -15,7 +15,9 @@ import { z } from 'zod'
 export const BASKET_QUOTE_SAVER_POINT = 'shop.basket-quote-saver'
 
 export type QuoteSaveInput = {
-  lines: Array<{ productId: string; quantity: number }>
+  /** `meta` is the shop's per-line meta (the delivery service chosen), kept on
+   *  the quote verbatim so opening it restores the same choice. */
+  lines: Array<{ productId: string; quantity: number; meta?: Record<string, string> }>
   customerName: string
   customerEmail: string
   customerPhone: string

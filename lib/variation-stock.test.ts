@@ -41,6 +41,7 @@ describe('variationWords', () => {
     expect(variationWords('120x80 cm black frame')).toEqual(['120', '80', 'black'])
     expect(variationWords('120 by 80, walnut finish')).toEqual(['120', '80', 'walnut'])
     expect(variationWords('160cm white colour')).toEqual(['160', 'white'])
+    expect(variationWords('140 centimetres, 60 centimetres deep, white finish, white frame')).toEqual(['140', '60', 'white'])
     expect(variationWords('which finishes are in stock')).toEqual([])
   })
   it('keeps words that can be option values', () => {
