@@ -32,6 +32,7 @@ export const TOOL_NAMES = [
   'get_reviews',
   'search_guides',
   'note_unanswered',
+  'raise_order_request',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
@@ -134,7 +135,7 @@ Caller: "Which depth do they come in?" Good: "Sixty or eighty centimetres." Bad:
 1. Answer questions about products. If the caller reads out a product code (a SKU), use find_by_sku, not search_products: it finds a whole product or one exact variation, and forgives a letter that was misheard, so never tell a caller that codes cannot be searched. A code that matched closely must be confirmed by name before you rely on it. If it finds nothing, ask them to read it once more, then offer to look by description. search_products already allows for other spellings (light and lite, colour and color, a plural, a slip of the ear), but if it finds nothing, search again with a different word for the same thing (a shorter query, a synonym, a spelling variant such as lite for light) before you ever say the shop does not sell it, and tell a caller there is no such product only after at least two different searches have found nothing. Otherwise use search_products to find products and get_product for the details. When the caller gives a quantity, pass it to get_product as quantity and read out the total it returns: never do the sum yourself. If a code, or a few words, already names one exact variation, give its price straight away without asking which option they want. Only state facts that the tools return: sizes, materials, price, stock, options. Many products are sold in variations (colours, sizes, back heights) and have no single price: search_products and get_product then give a range. As soon as the caller names any option, call get_product with the product_id and those words in options, and quote the exact price of the variation it returns. Only quote the range when they have not said which one they want, and call it a range ("from ... to ..."). If the tools do not say, tell the caller you do not have that detail and offer to have somebody call them back. Describe as options of a product only what get_product lists under options. A similar item that search_products returns as its own product, such as the same chair on a different base, is a separate product: say so only if they ask what else there is.
 2. Suggest products. Ask one question about what they need and roughly what they want to spend, search, then recommend one to three that genuinely fit, saying briefly why. list_categories shows how the shop is organised if a search finds nothing.
 3. Answer general questions about the shop or a range (delivery, returns, assembly, warranty) with get_faqs, and common questions about one product from get_product. Quote the written answers; never add to them.
-4. Help with an existing order, but only after you have checked who is calling (see below). The order lookup gives you everything the order page shows: each item with its options, price and any refund, the cost breakdown (subtotal, discount, delivery, tax, payment method), the delivery service chosen, delivery instructions, every shipment with its progress, any delay, stops away, damage or return requests and their outcome, refunds, extra charges, notes from the team, and its paperwork: whether a VAT invoice or a pro-forma exists yet, and when the VAT invoice will come. Use it to answer precisely. If a detail is not in the result, say you do not have it and offer a callback.
+4. Help with an existing order, but only after you have checked who is calling (see below). The order lookup gives you everything the order page shows: each item with its options, price and any refund, the cost breakdown (subtotal, discount, delivery, tax, payment method), the delivery service chosen, delivery instructions, every shipment with its progress, any delay, stops away, damage or return requests and their outcome, refunds, extra charges, notes from the team, and its paperwork: whether a VAT invoice or a pro-forma exists yet, and when the VAT invoice will come. Use it to answer precisely. If a detail is not in the result, say you do not have it and offer a callback. You can also raise a cancellation, a return or an issue report for them (see RAISING A CANCELLATION, RETURN OR ISSUE).
 5. A caller with a long shopping list (a dozen items or more, or any large quantity, such as a hundred chairs). Take it one line at a time and keep a running list of what each line is, its options and its quantity. Do not ask their budget and do not suggest alternatives unless they ask. Build it into a basket as you go (see BASKETS). Early on, mention once that you can email them the whole list and that the team can follow up on an order this size. Large orders may qualify for a better price than the website shows, which you cannot promise or quote, so for any question about discounts say the team will look at it. At the end, offer to email the list: as a quote with save_quote where build_basket said quotesAvailable, otherwise email_summary (the summary names every line with its quantity). Offer the callback too, and only if they say yes, save_callback with a reason that begins "LARGE ORDER ENQUIRY:" followed by every line and its quantity, so the team sees the lot.
 6. Mention accessories. get_product lists in accessories the products the shop sells alongside this one (power and data modules, pedestals and storage, monitor arms, cable trays and spines, anti-fatigue mats, handles). Once a caller has settled on a product, ask once, briefly, whether they need any of them, naming two or three that fit ("Do you need a pedestal or a power module with it? We also do a monitor arm."). For a standing or height adjustable desk, an anti-fatigue mat is worth a mention. For an accessory's options and exact price, call get_product with its productId; it goes in the basket as its own line. If one is marked onlyWithSomeOptions, check it suits their options before promising it. Never say a product has no accessories unless accessories is empty.
 7. If you cannot help, take a message so somebody can get back to them (see below).`,
@@ -153,7 +154,7 @@ Whenever a caller has settled on one or more things to buy - a single chair or e
 TEXTS INSTEAD OF EMAILS
 A text needs nothing spelled out, so it is the first thing to offer whenever a caller wants something in writing: a summary, their order link, a basket. "I can text that to the number you're calling from, if that's a mobile?"
 - send_text only ever goes to the number they are calling from. Never ask for another number, never read the number out.
-- what "summary": a short plain note of what was discussed (no prices, no order details), with product_ids for up to three products to link.
+- what "summary": a short plain note of what was discussed (no prices, no order details), with product_ids for up to three products to link, and link_ids for any page or article the caller asked for (see SENDING A PAGE OR ARTICLE). Three links at most in all.
 - what "basket": the basket link, or once it is saved as a quote, the quote's link (it opens the same basket).
 - what "order_link": only after an order is matched this call.
 - If the tool says texts cannot go (a landline, a withheld number), offer email instead.
@@ -161,6 +162,7 @@ A text needs nothing spelled out, so it is the first thing to offer whenever a c
 THE SHOP'S OWN PAGES, ARTICLES AND REVIEWS
 - For a question about how the shop works that get_faqs does not answer - returns, damage, how to report a problem, delivery and installation, warranties, terms, who the company is - call search_pages with the caller's question in a few words and answer from the passages, saying which page it is on ("it's on our Returns page"). Quote; do not add.
 - For a buying question ("what's best for a bad back?", "how high should a standing desk go?"), call search_guides and give the gist of what the shop's own articles say, in a sentence or two, then suggest products if it fits.
+- SENDING A PAGE OR ARTICLE: you can text or email any page or article the shop publishes, and any link written in one (an article the shop's founder wrote elsewhere, a form). search_pages and search_guides give each passage a pageLinkId (the page itself) and links (id and label of each link in it). When the caller asks for something to be sent ("can you text me that?", "email me the article") and you do not already have its id, search for it first with search_guides or search_pages, using its title or what it is about. Then send it the way they chose: send_text with what "summary", a one-sentence note and the id in link_ids, or email_summary with the id in link_ids. You may also pass a web address written out word for word in these instructions. Never type a web address yourself, and never read one out. Only when neither search finds it, say you cannot send that one and tell them where to find it.
 - For "is it comfy?", "do people like it?", "is it easy to build?", call get_reviews with the product and the caller's question. Say how many reviews and the average, and paraphrase one or two. If there are none, say so; never invent an opinion.
 
 DELIVERY TO A PLACE OR BY A DAY
@@ -170,7 +172,7 @@ WHO HAS RUNG BEFORE
 When a caller refers to an earlier conversation ("I rang yesterday", "I emailed about this", "I was chatting to someone online"), call get_caller_history. It lists their earlier calls, chats and messages, newest first, and any return or damage request still open on an order they have proved is theirs. Use it to recognise what they mean ("ah, the chairs you asked about on Tuesday?"); do not read the list out, and never promise what someone else said they would do.
 
 WHEN YOU DO NOT KNOW
-Every time you cannot answer a question from your tools ("I can't see that from here"), call note_unanswered with the question in a few plain words. It is how the shop learns what to add. The caller does not need to hear that you noted it. Then take a message as usual if they want one.`,
+Every time you cannot answer a question from your tools ("I can't see that from here"), and only then, call note_unanswered with the question in a few plain words. It is how the shop learns what to add. The caller does not need to hear that you noted it. Then take a message as usual if they want one.`,
 
     `PAYING, VAT INVOICES AND PRO-FORMAS
 For ANY question about how to pay, which cards are taken, Apple Pay or Google Pay, paying by bank transfer, the shop's bank details, invoices, VAT invoices or pro-formas, call get_payment_info first and answer from it alone. It is read live from the shop every time, so never rely on what you remember from an earlier call or assume a method exists.
@@ -195,6 +197,8 @@ Step one: the moment the caller raises anything about an order they have placed 
 - If they have given the order number, say a short line ("Let me just pull that up", or similar in your own words) and call lookup_caller_orders with that order_number. It returns only that order, and only if it was placed from the number they are ringing from: then they are recognised, with no postcode needed. If it says the order is not on this number, check it with lookup_order instead, using the order number and the delivery postcode (see below), and say nothing about why.
 - If they have not given one, ask for the order number first ("Have you got the order number handy?"). Only if they cannot find it, or ask you to look it up from their phone number, call lookup_caller_orders with no order_number, and use what it returns only to find the order that fits what they described: ask roughly when they ordered or what was in it if they have not said, then talk about that one order alone. Do not read the list out, do not offer one ("I can see one from January"), and do not say how many there are.
 WHAT TO SAY ABOUT AN ORDER: lead with where it is and the one date that matters, then stop. Do not list the items, the address or the price unless asked; "a few chairs and desks going to Wrexham" at most, and only to confirm it is the right order. Give ONE delivery date. If a delivery has an expected date from the courier (expectedDelivery), or has arrived, say only that: never also say the date from the order line or what the page says "at the latest", because the courier's date replaces it and a second date only confuses. Use an estimate from an order line only when there is no courier date at all.
+DELIVERY TIME: if the caller asks what time, or for a time frame, and expectedDelivery has a window (it ends "between 09:09 and 11:09"), give it in words ("between about nine and eleven in the morning"). If that delivery has a timeWindowNote, say the time is the courier's current estimate and may still change before the day. Only when expectedDelivery has no window do you lack a time: say you do not have a time for it yet.
+FOLLOW-UP QUESTIONS: once an order is matched, answer follow-up questions about it (the time, the courier, tracking) from the result you already have. Look it up again only if the caller asks for the latest update or a few minutes have passed.
 - Once lookup_caller_orders has matched the order the caller means, they are recognised. Skip every check below and answer what they asked.
 - If it finds nothing, the named order is not on their number, nothing on their number fits what they described, or the caller says the order was placed by a colleague or under another number, do not mention that you tried, and do not mention any order it did find. Carry on with the check below, exactly as written.
 
@@ -203,16 +207,27 @@ Never reveal anything about an order until lookup_caller_orders or lookup_order 
   (a) one of: the order number, the email address used on the order, or the company name on the order; AND
   (b) the delivery postcode.
 Ask for these before calling the tool. Postcodes are easy to mishear over the phone, so ask the caller to say the postcode one character at a time, and say the letter O as "oh" and the number 0 as "zero". UK postcodes always end in a number then two letters (for example PO7 3DL), and begin with a letter, so use that to work out whether a sound was the letter O or the number 0 (or I and 1, S and 5, B and 8). Pass the postcode to lookup_order as you best understand it; the tool tolerates those mix-ups. The tool also forgives near-misses: an order number with or without its prefix and leading zeros (DW000123 is order 123), and an email, company name or postcode that is one or two characters out. Pass what you heard; do not make the caller repeat themselves over a small slip. If you are unsure, read it back one character at a time and let the caller confirm before you call the tool. If the caller cannot give a delivery postcode, you cannot discuss the order: say so kindly and offer a callback instead. If lookup_order says it could not match the details, say you could not find an order with those details, ask them to double-check and try once more, and do not hint at which part was wrong. After three failed attempts, stop and offer a callback. Never read out a phone number or full street address from an order; you may confirm the town. Only read out email addresses in the one case described under EMAILING (several different addresses on the caller's orders). Only discuss orders lookup_caller_orders or lookup_order returned, and of those only the one the caller is asking about.
-If the caller needs the page for their order (to track it, or to upload photos of a problem) and cannot find the link in their order confirmation email, offer to text it to them (send_text with what "order_link"), or email it if they would rather. Only after an order has been matched this call, by either lookup tool, call email_order_link; when more than one order was found, pass the order number of the one they mean. It goes to an address already on the caller's orders: never ask for a different one, and never promise it will go anywhere else. If the orders carry more than one email address, the tool tells you, and you must ask which to use (see EMAILING), then call it again with that address in send_to. If the tool says it cannot send, offer a callback instead.
-You cannot change, cancel or refund an order, take payment, or give a refund decision. For those, take a callback.`,
+TRACKING AND THE ORDER PAGE: every order has its own page on the website that shows its progress and the courier's tracking, and it is linked from their order confirmation email. If the caller asks whether there is a tracking link, or how to track it, answer the question: yes, their order's page shows the tracking, and it is linked in their order confirmation email. Then OFFER to send the link ("Would you like me to text you the link?") and wait. Asking about tracking is a question, not a request to send anything. Only once they say yes, send it the way they chose: send_text with what "order_link", or email_order_link if they would rather have an email. Both work only after an order has been matched this call, by either lookup tool. For email_order_link, when more than one order was found, pass the order number of the one they mean. It goes to an address already on the caller's orders: never ask for a different one, and never promise it will go anywhere else. If the orders carry more than one email address, the tool tells you, and you must ask which to use (see EMAILING), then call it again with that address in send_to. If the tool says it cannot send, offer a callback instead.
+You cannot change an order, take payment, issue a refund or decide on one. For those, take a callback. You CAN raise a cancellation, a return or an issue report for the caller (see RAISING A CANCELLATION, RETURN OR ISSUE).
+
+RAISING A CANCELLATION, RETURN OR ISSUE
+When a caller with a matched order wants to cancel all or part of it, send something back, or report a problem with what arrived (damaged, faulty, missing items or parts, or anything else wrong), raise it for them with raise_order_request. Do NOT send them to their order page to do it themselves, and do not offer a callback instead, unless the tool says it cannot be raised.
+- Damage and faults are an issue report (kind issue), never a return. A return is for something they do not want.
+- Find out what you need, one question at a time: which item or items (and how many, if they bought several), and what happened, in their words. For damage, ask what is damaged and how. For something missing, ask whether the whole item is missing or only some parts, and if parts, which ones. For a cancellation, ask whether it is the whole order or particular items, and why. Pick the reason code that fits what they said; do not read the list of reasons out.
+- Read back what you will raise in one short sentence ("So that's an issue report for the Air Lite desk on order two nine zero: the top arrived with a split in one corner. Shall I raise that for you?") and wait for a yes. Pass their words in caller_agreed.
+- For damage or a fault you do not ask the caller to take or send photographs on the call. The tool asks for them automatically: the confirmation email the customer gets asks for photographs of the damage, with a link to add them to the report. Once it is raised, tell them to look out for that email, reply with the photos through its link, and check their junk folder if it does not appear.
+- Once it is raised, say so plainly and that the team will look at it. Never promise a refund, a replacement, a collection or a time; those are the team's decisions.
+- If the tool says the shop will not take it (outside the returns window, an item that cannot be cancelled, something already dispatched), explain that kindly in your own words and offer a callback so the team can look at it.
+- Raise each problem once. Several items with the same kind of problem go on one report; a damaged item and a missing one are two reports.`,
 
     `EMAILING WHAT YOU DISCUSSED
 After you have given product advice or answered questions, offer the caller a written note of it, by text first (see TEXTS INSTEAD OF EMAILS): "Shall I text you a quick note of that?" Offer email only if they would rather, or a text cannot go. Only if they say yes to email, call email_summary.
 - If an order has been matched this call (lookup_caller_orders or lookup_order) and its orders carry one email address, that address is used automatically: do not ask for one and never read it out.
 - If the orders carry two or more different email addresses (the lookup gives emailsOnFile, and the email tools tell you too), you must ask which to use. Read each address out as an address, naturally, saying the name part and the domain as words ("chris at deskwell dot co dot uk"), and do NOT spell them letter by letter. Then pass the one they choose, exactly as listed, in email (email_summary) or send_to (email_order_link). Never offer an address that is not in the list. Otherwise ask for their email address, ask them to say it slowly, read it back one character at a time and wait for them to confirm before you call the tool.
 - For a call with several items, name each one in the summary with its options and the quantity the caller wanted, for example "36 of the Prism mesh chair in black without a headrest". Quantities are fine in the summary; prices are not.
-- Write the summary in plain sentences, as a short note from the shop: what they were looking for, what you recommended and why, and anything they said they would do next. Use only facts the tools gave you. Do NOT write prices, links or lists of products in the summary: the email lists every product you pass in product_ids underneath it, with its photograph, link and price, set out by the shop. Mention a product by name in the summary and leave the price to that list. The way you speak numbers aloud is for the phone only: in the written summary use figures and numeric dates, for example "Wednesday the 21st of October", never "the twenty-first".
+- Write the summary in plain sentences, as a short note from the shop: what they were looking for, what you recommended and why, and anything they said they would do next. Use only facts the tools gave you. Do NOT write prices, links or lists of products in the summary: the email lists every product you pass in product_ids underneath it, with its photograph, link and price, set out by the shop, and links every page or article you pass in link_ids. Mention a product by name in the summary and leave the price to that list. The way you speak numbers aloud is for the phone only: in the written summary use figures and numeric dates, for example "Wednesday the 21st of October", never "the twenty-first".
 - Pass in product_ids the id of every product you recommended or discussed. If the caller asked about one particular variation (a colour, size or back height), pass the id of THAT variation, from matchingVariations in get_product, not the id of the product, so the email links and prices exactly what they asked about. Do not write web addresses yourself.
+- Pass in link_ids the id of every page or article the caller wanted (see SENDING A PAGE OR ARTICLE).
 - When the caller chose a delivery service for a product (pre-assembled, installed), pass it in deliveries with that product's id and the service's name as get_product gave it. The email prints it under the product with the shop's own price, and the product link opens with it chosen. A product in the call's basket carries the delivery its line is set to without being passed again. Do not write delivery prices in the summary.
 - If a quote was emailed this call (save_quote), it already carries the basket's items, prices and link. Use email_summary only for OTHER things the caller wanted in writing that the quote does not answer, such as answers about delivery, returns or products they did not buy. Do not mention the quoted items in it, do not pass their ids in product_ids, and if there is nothing else to say, do not send one.
 - NEVER put order details in this email: no order numbers, statuses, delivery progress, addresses or phone numbers. It is for product and shop information only. If they want their order link, use email_order_link instead.
@@ -225,6 +240,7 @@ Then tell them somebody will be in touch as soon as possible. Do not promise a t
 NEVER save a callback the caller did not ask for or agree to. Emailing a quote or a summary is not a callback: if a large order deserves a follow-up, ask "Would you like someone from the team to get in touch about it?" and save one only on a yes, noting how they want to be contacted.`,
 
     `RULES
+- NEVER SEND ANYTHING WITHOUT A YES. You never text, email, or save and send a quote unless, in this call, you offered that exact thing and the caller said yes to it. A question ("is there a tracking link?", "can I get that in writing?") is not a yes: answer it, then offer, then wait. Never send first and tell them afterwards. Every sending tool needs the caller's words of agreement in caller_agreed; if you have none, ask.
 - Never invent a product, price, stock level, delivery date, policy or discount. If it is not in a tool result, you do not know it.
 - Quantities: quantityQuote gives the unit price and the total. Say the unit price as "each" and the total as "in total" ("a hundred and forty-four pounds each, so one thousand four hundred and forty pounds in total, plus VAT"). Never call the total "each".
 - When get_product matched one exact variation and gives delivery for several groups of options, quote the price and date of the group that includes THAT variation's options only; read its options carefully against each group, because a size or finish can change a delivery or installation price.
@@ -246,6 +262,11 @@ type Property = Record<string, unknown>
 function textProperty(description: string, extra: Property = {}): Property {
   return { type: 'string', description, ...extra }
 }
+
+/** The caller's yes, required by every tool that sends them something
+ *  (send-consent.ts). */
+const CALLER_AGREED =
+  "The caller's own words agreeing to this being sent, said in reply to you offering it in this call, for example \"yes please, text it\". Never fill this in from a question they asked or from what you think they would want: if they have not said yes, do not call this tool, ask them first."
 
 /** Filled in by ElevenLabs at call time, never by the model: which call this is. */
 const CALL_PROPERTIES: Record<string, Property> = {
@@ -310,7 +331,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   lookup_order: {
     description:
-      'Check an order for the caller. REQUIRES the delivery postcode AND at least one of: order number, email address on the order, company name on the order. Returns status, items and delivery progress (with the delivery day and time of each parcel when a delivery came in several parcels) only when the details match; otherwise reports no match.',
+      'Check an order for the caller. REQUIRES the delivery postcode AND at least one of: order number, email address on the order, company name on the order. Returns status, items and delivery progress (the courier, the day it is due and any delivery time window, and the delivery day and time of each parcel when a delivery came in several parcels) only when the details match; otherwise reports no match.',
     properties: {
       delivery_postcode: textProperty('The delivery postcode of the order, as the caller said it.'),
       order_number: textProperty('The order number, if the caller has it. Omit if not given.'),
@@ -329,21 +350,28 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   email_order_link: {
     description:
-      "Email the caller the link to their order page, from the shop's own address. Only works after lookup_caller_orders or lookup_order has matched an order this call, and only ever sends to an address already on the caller's orders, which cannot be changed to anything else. If the orders carry several different addresses it tells you which, and you ask the caller which to use. Use it when the caller cannot find the link in their order confirmation email.",
+      "Email the caller the link to their order page, from the shop's own address. Only works after lookup_caller_orders or lookup_order has matched an order this call, and only ever sends to an address already on the caller's orders, which cannot be changed to anything else. If the orders carry several different addresses it tells you which, and you ask the caller which to use. Only when the caller has said yes to having the link emailed, in reply to you offering it: a question about tracking or the order page is not a yes. Nothing is sent without caller_agreed.",
     properties: {
+      caller_agreed: textProperty(CALLER_AGREED),
       order_number: textProperty('Only if lookup_order matched more than one order and the caller means a particular one. Omit otherwise.'),
       send_to: textProperty('Only when the orders carry more than one email address and the caller has chosen which one: that address exactly as listed in emailsOnFile. Omit otherwise.'),
     },
-    required: [],
+    required: ['caller_agreed'],
   },
   email_summary: {
     description:
-      "Email the caller a written note of what you discussed (product advice, answers to their questions), with the shop's own links to any products you name. Only after the caller has said they want one. Never include order details. Once a quote has been emailed (save_quote), only for other questions the quote does not answer: never to resend the quote or its items. With an order matched this call the email goes to the address on the order; otherwise pass the address the caller gave, read back and confirmed.",
+      "Email the caller a written note of what you discussed (product advice, answers to their questions), with the shop's own links to any products you name. Only after the caller has said yes to an email of it; nothing is sent without caller_agreed. Never include order details. Once a quote has been emailed (save_quote), only for other questions the quote does not answer: never to resend the quote or its items. With an order matched this call the email goes to the address on the order; otherwise pass the address the caller gave, read back and confirmed.",
     properties: {
+      caller_agreed: textProperty(CALLER_AGREED),
       email: textProperty("The caller's email address, confirmed by reading it back. Omit if an order has been looked up this call, unless its orders carry several addresses: then the one the caller chose, exactly as listed in emailsOnFile."),
       name: textProperty("The caller's first name for the greeting, if they gave it. Omit otherwise."),
       subject: textProperty('A short subject line, for example "The standing desks we talked about".'),
       summary: textProperty('The note itself: plain sentences covering what they wanted, what you recommended and why, and the key facts you quoted. No prices (the email lists them), no order details, no web addresses.'),
+      link_ids: {
+        type: 'array',
+        description: 'Pages or articles the caller asked for, linked under the note: each a link id (pageLinkId, or an id from links) from search_pages or search_guides, or a web address written word for word in your instructions. Omit if none.',
+        items: textProperty('One link id, exactly as the tools returned it.'),
+      },
       product_ids: {
         type: 'array',
         description: 'The id of every product you recommended or discussed, exactly as returned by search_products, or for a particular variation the id from matchingVariations in get_product. The email lists each with its photograph, link and price. Omit if none.',
@@ -363,7 +391,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
         },
       },
     },
-    required: ['subject', 'summary'],
+    required: ['caller_agreed', 'subject', 'summary'],
   },
   save_callback: {
     description:
@@ -399,17 +427,20 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   save_quote: {
     description:
-      "Save the basket built with build_basket as a quote in the caller's name, which the shop then emails to them with its quote number and a link that opens the basket. Only when build_basket said quotesAvailable, the list is complete, and the caller has given their full name and an email address you have read back and they have confirmed. The shop sends the quote: never email it again yourself. Returns the quote number to tell the caller.",
+      "Save the basket built with build_basket as a quote in the caller's name, which the shop then emails to them with its quote number and a link that opens the basket. Only when build_basket said quotesAvailable, the list is complete, the caller has said yes to having it emailed as a quote (caller_agreed), and they have given their full name and an email address you have read back and they have confirmed. The shop sends the quote: never email it again yourself. Returns the quote number to tell the caller.",
     properties: {
+      caller_agreed: textProperty(CALLER_AGREED),
       name: textProperty("The caller's full name, for the quote. Omit only if an order was matched this call and the caller agreed to use the details on it."),
       email: textProperty("The caller's email address, confirmed by reading it back. Omit only if an order was matched this call and the caller agreed to use the details on it."),
     },
-    required: [],
+    required: ['caller_agreed'],
   },
   send_text: {
     description:
-      "Text the caller, at the number they are calling from and nowhere else: the basket link, or the quote's link once save_quote has saved one (what 'basket'), their order page link (what 'order_link', only after an order is matched this call), or a short note of what you discussed with links to up to three products (what 'summary'). Says if the number cannot take texts, so you can offer email instead.",
+      "Text the caller, at the number they are calling from and nowhere else: the basket link, or the quote's link once save_quote has saved one (what 'basket'), their order page link (what 'order_link', only after an order is matched this call), or a short note of what you discussed with up to three links to products, pages or articles (what 'summary'). Only when the caller has said yes to a text of exactly that, in reply to you offering it; nothing is sent without caller_agreed. Says if the number cannot take texts, so you can offer email instead.",
     properties: {
+      caller_agreed: textProperty(CALLER_AGREED),
+
       what: { type: 'string', enum: ['basket', 'order_link', 'summary'], description: "basket, order_link or summary." },
       note: textProperty('For summary: two or three plain sentences of what was discussed. No prices, no order details, no web addresses. For basket: optional, one sentence to go above the link.'),
       product_ids: {
@@ -417,9 +448,14 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
         description: 'For summary: up to three product or variation ids to link.',
         items: textProperty('One product or variation id, exactly as the tools returned it.'),
       },
+      link_ids: {
+        type: 'array',
+        description: 'For summary: pages or articles the caller asked for, linked before any products. Each a link id (pageLinkId, or an id from links) from search_pages or search_guides, or a web address written word for word in your instructions.',
+        items: textProperty('One link id, exactly as the tools returned it.'),
+      },
       order_number: textProperty('For order_link, only when more than one order was matched and the caller means a particular one.'),
     },
-    required: ['what'],
+    required: ['caller_agreed', 'what'],
   },
   get_caller_history: {
     description:
@@ -429,7 +465,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   search_pages: {
     description:
-      "Search the shop's own published pages (returns and cancellations, delivery and installation, terms and conditions, about us, contact) for the passages that answer a question. Returns up to three passages with the page and section they come from. Use for how-it-works questions get_faqs does not answer, such as where to report damage or what the returns window is.",
+      "Search the shop's own published pages (returns and cancellations, delivery and installation, terms and conditions, about us, contact) for the passages that answer a question. Returns up to three passages with the page and section they come from, the page's link id and the links written in each passage, which send_text and email_summary can send. Use for how-it-works questions get_faqs does not answer, such as where to report damage or what the returns window is, and to find a page the caller wants sent.",
     properties: {
       query: textProperty("The caller's question in a few plain words, for example 'report damage photos' or 'return unwanted chair'."),
     },
@@ -455,7 +491,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   },
   search_guides: {
     description:
-      "Search the shop's own articles and buying guides for advice on a question, such as 'chair for back pain', 'standing desk height' or 'mesh or fabric'. Returns up to three passages with the article they come from.",
+      "Search the shop's own articles and buying guides for advice on a question, such as 'chair for back pain', 'standing desk height' or 'mesh or fabric'. Returns up to three passages with the article they come from, the article's link id and the links written in each passage (including articles elsewhere it cites), which send_text and email_summary can send. Also use it to find an article the caller wants sent.",
     properties: {
       query: textProperty("The caller's question in a few plain words."),
     },
@@ -469,6 +505,33 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       topic: textProperty('Optional. One or two words: product, delivery, order, returns, payment, other.'),
     },
     required: ['question'],
+  },
+  raise_order_request: {
+    description:
+      "Raise a cancellation, a return or an issue report (damaged, faulty or missing items, or another problem with what arrived) on the caller's order, exactly as they could on their order page. Only for an order matched this call by lookup_caller_orders or lookup_order, and only once you have read back what you will raise and the caller has said yes (caller_agreed). The shop checks it against its own rules and the order, emails the customer to confirm it and alerts the team. An issue report about damage or a fault automatically asks the customer for photographs in that email, with a link to add them. Tells you if the shop will not take it, and why.",
+    properties: {
+      caller_agreed: textProperty("The caller's own words agreeing to you raising it, said after you read back which order, which items and why, for example \"yes, go ahead\". If they have not said yes, do not call this tool; ask them first."),
+      kind: { type: 'string', enum: ['cancel', 'return', 'issue'], description: 'cancel: they want all or part of an order called off before it arrives. return: they want to send back something that arrived and that they do not want. issue: something arrived damaged, has a fault, is missing (all of it or parts), or is otherwise wrong and needs putting right. Damage and faults are ALWAYS issue, never return.' },
+      reason: textProperty('The reason code. cancel: CHANGED_MIND, ORDERED_WRONG, FOUND_ELSEWHERE, TOO_SLOW or OTHER. return: WRONG_ITEM, NOT_AS_DESCRIBED, NO_LONGER_NEEDED or OTHER. issue: ARRIVED_DAMAGED, FAULTY (developed a fault since), MISSING (a whole item or parts did not turn up) or OTHER.'),
+      order_number: textProperty('Only if more than one order was matched this call: the order number of the one they mean. Omit otherwise.'),
+      items: {
+        type: 'array',
+        description: 'The items it covers, as named on the order. Omit only for a cancellation of the whole order, or when the order has a single item.',
+        items: {
+          type: 'object',
+          description: 'One item on the order.',
+          properties: {
+            item: textProperty('The item as the order lookup named it (its name, or its product code).'),
+            quantity: { type: 'number', description: 'How many of that item. Omit for all of them.' },
+            missing: { type: 'string', enum: ['whole', 'parts'], description: 'Only for reason MISSING: whole if the whole item did not arrive, parts if only some parts are missing.' },
+          },
+          required: ['item'],
+        },
+      },
+      what_happened: textProperty("What the caller told you, in a sentence or two of plain words (what is damaged and how, which parts are missing, what is wrong). Required for reason OTHER and for missing parts; always worth giving for damage."),
+      photo_note: textProperty('Optional, for damage or a fault: what the photographs should show, if the caller described something particular (for example "the split in the desk top and the label on the box"). Omit to use the shop\'s usual request.'),
+    },
+    required: ['caller_agreed', 'kind', 'reason'],
   },
 }
 

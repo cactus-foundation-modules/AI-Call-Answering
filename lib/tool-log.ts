@@ -40,8 +40,9 @@ const PRIVATE_RESULT_TOOLS: ReadonlySet<string> = new Set([
   'save_callback',
   'send_text',
   'get_caller_history',
+  'raise_order_request',
 ])
-const OUTCOME_KEYS = ['ok', 'matched', 'locked', 'message', 'sent']
+const OUTCOME_KEYS = ['ok', 'matched', 'locked', 'message', 'sent', 'raised', 'photosRequested', 'refusedBecause']
 
 /** The ids ElevenLabs adds to every call, which say nothing about the lookup. */
 const CALL_KEYS = new Set(['call_sid', 'conversation_id'])

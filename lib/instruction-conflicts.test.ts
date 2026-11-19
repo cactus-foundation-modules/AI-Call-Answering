@@ -34,6 +34,13 @@ describe('findInstructionConflicts', () => {
     expect(findInstructionConflicts('We deliver within 3 working days.')).toHaveLength(1)
   })
 
+  it('flags sending callers to raise returns or damage themselves', () => {
+    expect(findInstructionConflicts('Returns and cancellations are raised by the customer on their order page, not by phone.')).toHaveLength(1)
+    expect(findInstructionConflicts('Damage: report within 5 days of delivery on the order page, with photos.')).toHaveLength(1)
+    expect(findInstructionConflicts('Offer to text them their order page link.')).toHaveLength(0)
+    expect(findInstructionConflicts('Raise returns for them yourself. Never send them to their order page to do it.')).toHaveLength(0)
+  })
+
   it('warns once per kind', () => {
     expect(findInstructionConflicts('No invoicing. No bank transfer.')).toHaveLength(1)
   })

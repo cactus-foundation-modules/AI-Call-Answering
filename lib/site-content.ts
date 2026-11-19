@@ -1,4 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
+import { getSiteUrl } from '@/lib/config/env'
+import { htmlLinks, markdownLinks, plainTextLinks, siteLink, type RawLink, type SiteLink } from './site-links'
 
 // ---------------------------------------------------------------------------
 // The shop's own words, searched live: its published pages (terms, delivery,
@@ -14,13 +16,28 @@ import { prisma } from '@/lib/db/prisma'
 // passages under their nearest heading, and scored by how many of the
 // question's words each contains. Cached for a few minutes: a page edit
 // reaches the phone within that.
+//
+// Each passage also carries the links written into it (an article the page
+// cites, a form it points to) and the page or article's own address, as ids the
+// send tools can turn back into the shop's own web addresses. A caller who
+// asks "can you text me that article?" gets it, and the model never types a
+// web address of its own (site-links.ts).
 // ---------------------------------------------------------------------------
 
-export type Passage = { source: string; heading: string; text: string }
+export type Passage = {
+  source: string
+  heading: string
+  text: string
+  /** The page or article itself. Set once the document's address is known. */
+  page?: SiteLink
+  /** Links written into this passage, in reading order. Absent when none. */
+  links?: SiteLink[]
+}
 
 const CACHE_MS = 5 * 60_000
 const PASSAGE_CHARS = 700
 const MAX_PASSAGES = 3
+const MAX_LINKS_PER_PASSAGE = 5
 
 // Keys whose strings are never copy: ids, colours, urls, styling.
 const SKIP_KEY = /(^id$|Id$|url|href|src|color|colour|class|icon|slug|padding|margin|width|height|align|variant|mode|target|style|bg|pattern|image|menu|gap|size|sticky|type|meta|og)/i
@@ -41,7 +58,37 @@ function stripHtml(html: string): string {
   return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&[a-z#0-9]+;/gi, ' ')
 }
 
-type Chunk = { heading: boolean; text: string }
+type Chunk = { heading: boolean; text: string; links?: RawLink[] }
+
+function withLinks(chunk: Chunk, links: RawLink[]): Chunk {
+  return links.length > 0 ? { ...chunk, links } : chunk
+}
+
+/** A rich-text run's link mark, if it has one: { type: 'link', attrs: { href } }. */
+function markLink(marks: unknown, label: string): RawLink[] {
+  if (!Array.isArray(marks)) return []
+  for (const mark of marks) {
+    if (!mark || typeof mark !== 'object') continue
+    const { type, attrs } = mark as { type?: unknown; attrs?: unknown }
+    const href = attrs && typeof attrs === 'object' ? (attrs as { href?: unknown }).href : undefined
+    if (type === 'link' && typeof href === 'string') return [{ label, href }]
+  }
+  return []
+}
+
+const LINK_LABEL_KEYS = ['label', 'text', 'title'] as const
+
+/** A block that is itself a link (a button, a card): a string href or url
+ *  beside a string label. */
+function blockLink(object: Record<string, unknown>): RawLink | null {
+  const href = typeof object.href === 'string' ? object.href : typeof object.url === 'string' ? object.url : null
+  if (!href) return null
+  for (const key of LINK_LABEL_KEYS) {
+    const label = object[key]
+    if (typeof label === 'string' && label.trim()) return { label: stripHtml(label).replace(/\s+/g, ' ').trim(), href }
+  }
+  return null
+}
 
 /** Text out of any Puck tree, including rich-text documents nested in a
  *  block's props, in reading order, with headings marked. Pure. */
@@ -51,7 +98,7 @@ export function extractChunks(data: unknown): Chunk[] {
     if (typeof node === 'string') {
       if (!SKIP_KEY.test(key) && looksLikeCopy(node)) {
         const text = stripHtml(node).replace(/\s+/g, ' ').trim()
-        if (text) chunks.push({ heading: inHeading || /^(title|heading)$/i.test(key), text })
+        if (text) chunks.push(withLinks({ heading: inHeading || /^(title|heading)$/i.test(key), text }, htmlLinks(node)))
       }
       return
     }
@@ -65,11 +112,15 @@ export function extractChunks(data: unknown): Chunk[] {
     // A rich-text leaf: { type: 'text', text: '...' }.
     if (object.type === 'text' && typeof object.text === 'string') {
       const text = object.text.replace(/\s+/g, ' ').trim()
-      if (text) chunks.push({ heading: isHeading, text })
+      if (text) chunks.push(withLinks({ heading: isHeading, text }, markLink(object.marks, text)))
       return
     }
+    // A button or card: its label is read here, once, with the link it carries.
+    const link = blockLink(object)
+    if (link) chunks.push({ heading: false, text: link.label, links: [link] })
     for (const [childKey, value] of Object.entries(object)) {
       if (childKey === 'root') continue
+      if (link && (LINK_LABEL_KEYS as readonly string[]).includes(childKey)) continue
       visit(value, childKey, isHeading)
     }
   }
@@ -80,13 +131,24 @@ export function extractChunks(data: unknown): Chunk[] {
 }
 
 /** Passages of about PASSAGE_CHARS, each under the heading it sits beneath. */
-export function toPassages(source: string, chunks: Chunk[]): Passage[] {
+/** Passages of about PASSAGE_CHARS, each under the heading it sits beneath,
+ *  with the links its words carried. siteUrl resolves links written as a path
+ *  ("/returns"). Pure. */
+export function toPassages(source: string, chunks: Chunk[], siteUrl = ''): Passage[] {
   const passages: Passage[] = []
   let heading = ''
   let buffer = ''
+  let links: SiteLink[] = []
   const flush = () => {
-    if (buffer.trim()) passages.push({ source, heading, text: buffer.trim() })
+    if (buffer.trim()) passages.push({ source, heading, text: buffer.trim(), ...(links.length > 0 ? { links } : {}) })
     buffer = ''
+    links = []
+  }
+  const addLinks = (raw: readonly RawLink[] | undefined) => {
+    for (const entry of raw ?? []) {
+      const link = siteLink(entry, siteUrl)
+      if (link && !links.some((known) => known.id === link.id) && links.length < MAX_LINKS_PER_PASSAGE) links.push(link)
+    }
   }
   for (const chunk of chunks) {
     if (chunk.heading) {
@@ -96,6 +158,7 @@ export function toPassages(source: string, chunks: Chunk[]): Passage[] {
     }
     if (buffer.length + chunk.text.length > PASSAGE_CHARS) flush()
     buffer += `${buffer ? ' ' : ''}${chunk.text}`
+    addLinks(chunk.links)
   }
   flush()
   return passages
@@ -144,33 +207,53 @@ async function tableExists(table: string): Promise<boolean> {
 
 async function pagePassages(): Promise<{ passages: Passage[]; titles: string[] }> {
   if (pagesCache && Date.now() - pagesCache.at < CACHE_MS) return pagesCache
-  const rows = await prisma.$queryRaw<Array<{ title: string; publishedData: unknown; body: string | null }>>`
-    SELECT "title", "publishedData", "body" FROM "InfoPage" WHERE "status"::text = 'published' ORDER BY "title"
+  const rows = await prisma.$queryRaw<Array<{ slug: string; title: string; publishedData: unknown; body: string | null }>>`
+    SELECT "slug", "title", "publishedData", "body" FROM "InfoPage" WHERE "status"::text = 'published' ORDER BY "title"
   `
+  const site = getSiteUrl()
   const passages: Passage[] = []
   for (const row of rows) {
-    const chunks = row.publishedData ? extractChunks(row.publishedData) : [{ heading: false, text: stripHtml(row.body ?? '').replace(/\s+/g, ' ').trim() }]
-    passages.push(...toPassages(row.title, chunks))
+    const body = row.body ?? ''
+    const chunks: Chunk[] = row.publishedData
+      ? extractChunks(row.publishedData)
+      : [withLinks({ heading: false, text: stripHtml(body).replace(/\s+/g, ' ').trim() }, [...htmlLinks(body), ...markdownLinks(body)])]
+    const page = siteLink({ label: row.title, href: `/${row.slug}` }, site)
+    passages.push(...toPassages(row.title, chunks, site).map((passage) => (page ? { ...passage, page } : passage)))
   }
   pagesCache = { at: Date.now(), passages, titles: rows.map((row) => row.title) }
   return pagesCache
 }
 
+/** Whether the Gazette serves posts at the site root rather than under
+ *  /gazette: its own setting, read the way site-content already reads its
+ *  posts, so this module needs nothing of the Gazette's code. Read through
+ *  to_jsonb so a Gazette older than the setting reads as the default. */
+async function postsAtRoot(): Promise<boolean> {
+  if (!(await tableExists('gz_settings'))) return false
+  const rows = await prisma.$queryRaw<Array<{ style: string | null }>>`
+    SELECT to_jsonb(s) ->> 'post_url_style' AS "style" FROM "gz_settings" s WHERE s."id" = 'singleton' LIMIT 1
+  `
+  return rows[0]?.style === 'ROOT'
+}
+
 async function postPassages(): Promise<Passage[]> {
   if (postsCache && Date.now() - postsCache.at < CACHE_MS) return postsCache.passages
   if (!(await tableExists('gz_posts'))) return []
-  const rows = await prisma.$queryRaw<Array<{ title: string; excerpt: string | null; builder_data: unknown }>>`
-    SELECT "title", "excerpt", "builder_data" FROM "gz_posts"
+  const rows = await prisma.$queryRaw<Array<{ slug: string; title: string; excerpt: string | null; builder_data: unknown }>>`
+    SELECT "slug", "title", "excerpt", "builder_data" FROM "gz_posts"
     WHERE "status" = 'PUBLISHED' AND "is_private" = false AND ("published_at" IS NULL OR "published_at" <= CURRENT_TIMESTAMP)
     ORDER BY "published_at" DESC NULLS LAST LIMIT 500
   `
+  const site = getSiteUrl()
+  const rootUrls = await postsAtRoot()
   const passages: Passage[] = []
   for (const row of rows) {
-    const chunks = [
+    const chunks: Chunk[] = [
       ...(row.excerpt ? [{ heading: false, text: row.excerpt }] : []),
       ...extractChunks(row.builder_data),
     ]
-    passages.push(...toPassages(row.title, chunks))
+    const page = siteLink({ label: row.title, href: rootUrls ? `/${row.slug}` : `/gazette/${row.slug}` }, site)
+    passages.push(...toPassages(row.title, chunks, site).map((passage) => (page ? { ...passage, page } : passage)))
   }
   postsCache = { at: Date.now(), passages }
   return passages
@@ -183,6 +266,23 @@ export async function searchPages(query: string): Promise<{ passages: Passage[];
 
 export async function searchGuides(query: string): Promise<Passage[]> {
   return rankPassages(await postPassages(), query)
+}
+
+/** Every page and article the shop publishes, every link written into them,
+ *  and every address written out in the owner's instructions, by id: the only
+ *  web addresses the send tools will put in a text or an email. */
+export async function sendableLinks(instructions: string): Promise<Map<string, SiteLink>> {
+  const [{ passages }, posts] = await Promise.all([pagePassages(), postPassages()])
+  const index = new Map<string, SiteLink>()
+  for (const passage of [...passages, ...posts]) {
+    for (const link of [...(passage.page ? [passage.page] : []), ...(passage.links ?? [])]) {
+      if (!index.has(link.id)) index.set(link.id, link)
+    }
+  }
+  for (const link of plainTextLinks(instructions)) {
+    if (!index.has(link.id)) index.set(link.id, link)
+  }
+  return index
 }
 
 // -- reviews ------------------------------------------------------------------

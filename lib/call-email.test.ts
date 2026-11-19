@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanSubject, pickRecipient, signatureHtml, textToHtml } from './call-email'
+import { cleanSubject, linksHtml, pickRecipient, signatureHtml, textToHtml } from './call-email'
 import type { CallRecord } from './calls'
 
 const call = (over: Partial<CallRecord> = {}) =>
@@ -42,5 +42,16 @@ describe('pickRecipient', () => {
   it('asks which when the orders carry several addresses', () => {
     expect(pickRecipient(c, null, ['a@example.com', 'b@example.com'])).toEqual({ ask: ['a@example.com', 'b@example.com'] })
     expect(pickRecipient(c, 'B@example.com', ['a@example.com', 'b@example.com'])).toEqual({ email: 'b@example.com', fromOrder: true })
+  })
+})
+
+describe('linksHtml', () => {
+  it('is empty with nothing to link', () => {
+    expect(linksHtml([])).toBe('')
+  })
+  it('lists each link by its label, escaped', () => {
+    const html = linksHtml([{ id: 'ln_1', label: 'Prices <b>& bids</b>', url: 'https://example.org/a?b=1&c="2"' }])
+    expect(html).toContain('The link we mentioned:')
+    expect(html).toContain('<a href="https://example.org/a?b=1&amp;c=&quot;2&quot;">Prices &lt;b&gt;&amp; bids&lt;/b&gt;</a>')
   })
 })

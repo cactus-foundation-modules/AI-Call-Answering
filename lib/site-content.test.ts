@@ -36,3 +36,47 @@ describe('site content search', () => {
     expect(rankPassages(passages, 'parking')).toEqual([])
   })
 })
+
+describe('links in site content', () => {
+  const article = {
+    content: [
+      { type: 'Heading', props: { id: 'h1', text: 'Who wrote it' } },
+      {
+        type: 'RichText',
+        props: {
+          id: 'r1',
+          content: {
+            type: 'doc',
+            content: [{
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'Chris also wrote the trade-side argument for ' },
+                { type: 'text', text: 'Workplace Insight', marks: [{ type: 'link', attrs: { href: 'https://workplaceinsight.net/opening-bid/', target: '_blank' } }] },
+                { type: 'text', text: ' this week.' },
+              ],
+            }],
+          },
+        },
+      },
+      { type: 'Button', props: { id: 'b1', label: 'Report a problem', href: '/returns' } },
+      { type: 'Text', props: { id: 't1', text: '<p>Write to us at <a href="mailto:hi@shop.example">our inbox</a> any time.</p>' } },
+    ],
+  }
+  const passages = toPassages('How to read a price', extractChunks(article), 'https://shop.example')
+
+  it('keeps each link with the passage it is written in, by label', () => {
+    expect(passages).toHaveLength(1)
+    expect(passages[0]!.links?.map((link) => [link.label, link.url])).toEqual([
+      ['Workplace Insight', 'https://workplaceinsight.net/opening-bid/'],
+      ['Report a problem', 'https://shop.example/returns'],
+    ])
+  })
+
+  it('reads a button label once, not twice', () => {
+    expect(passages[0]!.text.match(/Report a problem/g)).toHaveLength(1)
+  })
+
+  it('finds the passage by the name of the site it links to', () => {
+    expect(rankPassages(passages, 'workplace insight article')[0]?.links?.[0]?.label).toBe('Workplace Insight')
+  })
+})

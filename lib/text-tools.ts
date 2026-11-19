@@ -21,6 +21,11 @@ import { basketServiceMenus, matchService, serviceMissMessage } from './delivery
 import { quotesAvailable } from './quote-saver'
 import { getSettings } from './settings'
 import { composeText, textCaller } from './sms'
+import { sendableLinks } from './site-content'
+import { pickLinks, unknownLinksMessage } from './site-links'
+
+/** A text holds three links at most: past that the note has no room. */
+export const MAX_TEXT_LINKS = 3
 
 // The handlers behind build_basket and send_text. Every answer is words the
 // model can say or act on, never an error code (see tool-handlers.ts).
@@ -119,11 +124,12 @@ export type TextKind = 'basket' | 'order_link' | 'summary'
 
 export async function sendText(
   call: CallRecord,
-  input: { what: TextKind; note: string | null; productIds: string[]; orderNumber: string | null },
+  input: { what: TextKind; note: string | null; productIds: string[]; linkIds: string[]; orderNumber: string | null },
 ): Promise<Result> {
   const settings = await getSettings()
   const signOff = settings.businessName.trim()
   let body: string
+  let leftOut = ''
   if (input.what === 'basket') {
     const basket = await getCallBasket(call.id)
     if (!basket || basket.lines.length === 0) {
@@ -147,11 +153,20 @@ export async function sendText(
   } else {
     const note = (input.note ?? '').trim()
     if (!note) return { ok: false, message: 'Write a short note of what was discussed and retry.' }
-    body = composeText(note, await productLinks(input.productIds), signOff)
+    // The page or article they asked for comes first; products fill what room is left.
+    const picked = input.linkIds.length > 0
+      ? pickLinks(input.linkIds, await sendableLinks(settings.extraInstructions), MAX_TEXT_LINKS)
+      : { links: [], unknown: 0 }
+    if (input.linkIds.length > 0 && picked.links.length === 0) {
+      return { ok: false, message: `Nothing was sent. ${unknownLinksMessage(picked.unknown)} If you cannot find it, tell the caller where it is on the website instead.` }
+    }
+    leftOut = unknownLinksMessage(picked.unknown)
+    const links = [...picked.links.map((link) => link.url), ...(await productLinks(input.productIds))].slice(0, MAX_TEXT_LINKS)
+    body = composeText(note, links, signOff)
   }
   const sent = await textCaller(call, body)
   if (!sent.ok) return sent
-  return { ok: true, message: 'Texted to the number they are calling from. Tell them it is on its way. Do not read the number out.' }
+  return { ok: true, message: ['Texted to the number they are calling from. Tell them it is on its way. Do not read the number out.', leftOut].filter(Boolean).join(' ') }
 }
 
 /** The line added to a summary email when the call has a basket, so a caller

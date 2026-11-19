@@ -68,6 +68,16 @@ const RULES: Rule[] = [
     advice:
       'Callers must never be told, or led to believe, that they are talking to a person. The built-in rules have the assistant say plainly that it is the automated assistant when asked. A name and persona are fine.',
   },
+  {
+    // "Returns are raised on the order page, not by phone": written before the
+    // assistant could raise them, and it sends every caller off to do it alone.
+    test: /\b(order page|account page|on the website|online|themselves|not by phone|not over the phone)\b/i,
+    about: /\b(return\w*|cancel\w*|damage\w*|report\w*|faulty|missing|shortages?)\b/i,
+    // "Never send them to their order page to do it" says the opposite.
+    notAbout: /\b(never|don'?t|do not)\s+(send|ask|tell|direct|point)\b/i,
+    advice:
+      'The assistant raises cancellations, returns and issue reports for the caller once their order is checked, and asks for photographs of any damage in the confirmation email. A line sending callers to do it themselves stops it. Say instead what your rules are (the returns window, how long they have to report damage) and leave the raising to the assistant.',
+  },
 ]
 
 function sentences(text: string): string[] {

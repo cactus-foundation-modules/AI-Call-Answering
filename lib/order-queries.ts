@@ -7,7 +7,9 @@ import { proformaAvailable } from '@/modules/shop/lib/proforma'
 import { getPaymentProvider, resolveProviderLabel } from '@/modules/shop/lib/payments/registry'
 import { manualPaymentInstructions, paymentOutstanding } from '@/modules/shop/lib/payment-instructions'
 import { settlementMethod } from '@/modules/shop/lib/order-pay-online'
-import type { ShpPaymentStatus } from '@/modules/shop/lib/types'
+import type { ShpDeliveryDelay, ShpPaymentStatus } from '@/modules/shop/lib/types'
+import { deliveryBookingForShipment } from '@/modules/shop/lib/delivery-slot'
+import { parcelCourierTimesEmailable } from '@/modules/shop/lib/tracking/provisional-window'
 import { orderPaperwork, speakableInstructions } from './payment-words'
 import {
   claimMatchesOrder,
@@ -192,7 +194,14 @@ export type VerifiedOrder = {
     carrier: string | null
     dispatched: string
     progress: string | null
+    /** The day it is due, with the time window when there is one: the same
+     *  booking the customer's order page shows (the day staff typed, or the
+     *  courier's own day and window off their tracking). */
     expectedDelivery: string | null
+    /** Words to say with the window when the courier's time is only their
+     *  current estimate (AIT's tracking page shows a holding window until they
+     *  confirm). Null when there is no window or it is firm. */
+    timeWindowNote: string | null
     /** When the courier handed it over, day and time. For a delivery made up of
      *  several parcels this is left null: each parcel has its own in `parcels`. */
     deliveredOn: string | null
@@ -266,14 +275,18 @@ type NoteRow = { order_id: string; content: string; created_at: Date }
 type ShipmentRow = {
   order_id: string
   carrier: string | null
+  courier_id: string | null
   shipped_at: Date
   tracking_stage: string | null
   delivery_date: string | null
   delivery_slot_start: string | null
   delivery_slot_end: string | null
+  delivery_window_from: Date | null
+  delivery_window_to: Date | null
   delivered_at: Date | null
   consignment_parcels: unknown
   delivery_delay: string | null
+  delivery_delayed_from: string | null
   delivery_delay_note: string | null
   signed_by: string | null
   carrier_out_for_delivery: boolean | null
@@ -285,17 +298,50 @@ function day(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-/** Whether any shipment of this order has a real delivery date (or has been
- *  delivered), which makes the estimate printed on its lines redundant. */
+/** Whether any shipment of this order has a real delivery date or courier window
+ *  (or has been delivered), which makes the estimate on its lines redundant. */
 function hasCourierDate(orderId: string, shipments: readonly ShipmentRow[]): boolean {
-  return shipments.some((shipment) => shipment.order_id === orderId && (!!shipment.delivery_date || !!shipment.delivered_at))
+  return shipments.some((shipment) => shipment.order_id === orderId && (!!shipment.delivery_date || !!shipment.delivery_window_from || !!shipment.delivered_at))
 }
 
-function expected(row: ShipmentRow): string | null {
-  if (!row.delivery_date) return null
-  return row.delivery_slot_start && row.delivery_slot_end
-    ? `${row.delivery_date}, between ${row.delivery_slot_start} and ${row.delivery_slot_end}`
-    : row.delivery_date
+function delayKind(value: string | null): ShpDeliveryDelay | null {
+  return value === 'today' || value === 'rebooking' ? value : null
+}
+
+const PROVISIONAL_WINDOW_NOTE =
+  "This time window is the courier's current estimate from their tracking. Give it as that, and say they may still adjust it before the day."
+
+/** The day it is due and its window, merged exactly as the order page merges
+ *  them: a slot typed on the parcel wins, else the courier's tracking window
+ *  for the booked day (or their own day when none is typed). Reading only the
+ *  typed columns left AIT's window out and the assistant said there was none
+ *  (DW000288). The window is flagged when the courier's times are a holding
+ *  estimate rather than a confirmed slot. */
+function expected(
+  row: ShipmentRow,
+  timezone: string,
+  config: Pick<ShpConfig, 'deliveryCouriers'>,
+): { expectedDelivery: string | null; timeWindowNote: string | null } {
+  const booking = deliveryBookingForShipment({
+    deliveryDate: row.delivery_date,
+    deliverySlotStart: row.delivery_slot_start,
+    deliverySlotEnd: row.delivery_slot_end,
+    deliveryWindowFrom: row.delivery_window_from,
+    deliveryWindowTo: row.delivery_window_to,
+    deliveryDelay: delayKind(row.delivery_delay),
+    deliveryDelayedFrom: row.delivery_delayed_from,
+    deliveredAt: row.delivered_at,
+  }, timezone)
+  if (!booking.date) return { expectedDelivery: null, timeWindowNote: null }
+  if (!booking.slotStart || !booking.slotEnd) return { expectedDelivery: booking.date, timeWindowNote: null }
+  // A slot typed on the parcel, or read from the courier's own email, is firm;
+  // only a window that came off the tracking page can be a holding one.
+  const typed = row.delivery_slot_start === booking.slotStart && row.delivery_slot_end === booking.slotEnd
+  const firm = typed || parcelCourierTimesEmailable(config, { courierId: row.courier_id, carrier: row.carrier })
+  return {
+    expectedDelivery: `${booking.date}, between ${booking.slotStart} and ${booking.slotEnd}`,
+    timeWindowNote: firm ? null : PROVISIONAL_WINDOW_NOTE,
+  }
 }
 
 /** The contact details of the customer the matched orders belong to, or null
@@ -437,9 +483,10 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
       FROM "shp_order_items" WHERE "order_id" IN (${Prisma.join(ids)})
     `),
     prisma.$queryRaw<ShipmentRow[]>(Prisma.sql`
-      SELECT "order_id", "carrier", "shipped_at", "tracking_stage", "delivery_date",
-             "delivery_slot_start", "delivery_slot_end", "delivered_at", "consignment_parcels",
-             "delivery_delay", "delivery_delay_note", "signed_by", "carrier_out_for_delivery", "drops_away", "minutes_to_stop"
+      SELECT "order_id", "carrier", "courier_id", "shipped_at", "tracking_stage", "delivery_date",
+             "delivery_slot_start", "delivery_slot_end", "delivery_window_from", "delivery_window_to",
+             "delivered_at", "consignment_parcels",
+             "delivery_delay"::text AS "delivery_delay", "delivery_delayed_from", "delivery_delay_note", "signed_by", "carrier_out_for_delivery", "drops_away", "minutes_to_stop"
       FROM "shp_shipments" WHERE "order_id" IN (${Prisma.join(ids)}) ORDER BY "shipped_at"
     `),
     prisma.$queryRaw<RefundRow[]>(Prisma.sql`
@@ -532,7 +579,7 @@ async function readOrders(ids: string[]): Promise<OrderLookupOutcome> {
           carrier: shipment.carrier,
           dispatched: day(shipment.shipped_at),
           progress: trackingStageWords(shipment.tracking_stage),
-          expectedDelivery: expected(shipment),
+          ...expected(shipment, timezone, config),
           deliveredOn: !split && shipment.delivered_at ? describeDeliveryMoment(shipment.delivered_at, timezone) : null,
           parcels,
           parcelSummary: parcels ? summariseParcels(parcels) : null,

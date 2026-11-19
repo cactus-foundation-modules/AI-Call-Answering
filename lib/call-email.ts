@@ -12,6 +12,8 @@ import { askWhichEmailMessage, chooseOrderEmail } from './email-choice'
 import { emailsOnOrders, nameOnOrderEmail } from './order-queries'
 import { matchService, timingMenus } from './delivery-choice'
 import type { ProductRef } from '@/modules/unified-inbox/lib/products'
+import { sendableLinks } from './site-content'
+import { pickLinks, unknownLinksMessage, type SiteLink } from './site-links'
 
 // ---------------------------------------------------------------------------
 // Emailing a caller a written note of what was discussed on the phone.
@@ -34,6 +36,7 @@ import type { ProductRef } from '@/modules/unified-inbox/lib/products'
 export const MAX_EMAILS_PER_CALL = 3
 export const MAX_EMAILS_PER_NUMBER_PER_HOUR = 6
 export const MAX_PRODUCTS_PER_EMAIL = 5
+export const MAX_LINKS_PER_EMAIL = 5
 
 const SUMMARY_MAX = 3000
 
@@ -102,6 +105,14 @@ export function basketParagraph(basket: CallBasket | null): string {
   return `<p><a href="${escapeHtml(url)}">Open the basket we put together on the phone</a> to see prices and delivery and check out.</p>`
 }
 
+/** The pages and articles the caller asked for, as a list of the shop's own
+ *  links under the note. Labels and addresses are escaped; '' for none. Pure. */
+export function linksHtml(links: readonly SiteLink[]): string {
+  if (links.length === 0) return ''
+  const items = links.map((link) => `<li><a href="${escapeHtml(link.url)}">${escapeHtml(link.label)}</a></li>`).join('')
+  return `<p>${links.length === 1 ? 'The link we mentioned:' : 'The links we mentioned:'}</p><ul>${items}</ul>`
+}
+
 /** The products to list under the summary. Once a quote has been emailed, its
  *  lines are left out: they are on the quote already. */
 export function productsForSummary(productIds: readonly string[], basket: CallBasket | null): string[] {
@@ -116,6 +127,9 @@ export type SummaryInput = {
   subject: string | undefined
   summary: string
   productIds: string[]
+  /** Pages and articles to link: ids from search_pages / search_guides, or an
+   *  address written out in the owner's instructions. */
+  linkIds: string[]
   /** The delivery service the caller chose for a product, in the words get_product used. */
   deliveries: Array<{ productId: string; service: string }>
 }
@@ -147,7 +161,7 @@ export function withDeliveries(
   })
 }
 
-export type SummaryOutcome = { ok: true } | { ok: false; message: string }
+export type SummaryOutcome = { ok: true; message?: string } | { ok: false; message: string }
 
 export async function emailCallSummary(call: CallRecord, input: SummaryInput): Promise<SummaryOutcome> {
   if (call.emailsSent >= MAX_EMAILS_PER_CALL || (await recentEmailsFrom(call.fromNumber)) >= MAX_EMAILS_PER_NUMBER_PER_HOUR) {
@@ -167,6 +181,12 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   if (!summary) return { ok: false, message: 'There was nothing to put in the email. Write a short note of what was discussed and retry.' }
 
   const settings = await getSettings()
+  const picked = input.linkIds.length > 0
+    ? pickLinks(input.linkIds, await sendableLinks(settings.extraInstructions), MAX_LINKS_PER_EMAIL)
+    : { links: [], unknown: 0 }
+  if (input.linkIds.length > 0 && picked.links.length === 0) {
+    return { ok: false, message: `Nothing was sent. ${unknownLinksMessage(picked.unknown)} If you cannot find it, tell the caller where it is on the website instead.` }
+  }
   const basket = await getCallBasket(call.id)
   const bare = await toProductRefs(productsForSummary(input.productIds, basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
   const refs = withDeliveries(bare, input.deliveries, basket, await timingMenus(bare.map((ref) => ref.id)))
@@ -176,12 +196,13 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
     customerName: input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || 'there',
     subject: cleanSubject(input.subject),
-    summaryHtml: textToHtml(summary) + basketParagraph(basket),
+    summaryHtml: textToHtml(summary) + linksHtml(picked.links) + basketParagraph(basket),
     productsHtml: listing,
     hasProducts: listing ? 'true' : '',
     signatureHtml: signatureHtml(settings.emailSignature),
   })
   if (!sent) return { ok: false, message: 'The email could not be sent just now. Offer a callback instead.' }
   await recordEmailSent(call.id, recipient.email)
-  return { ok: true }
+  const leftOut = unknownLinksMessage(picked.unknown)
+  return leftOut ? { ok: true, message: leftOut } : { ok: true }
 }
