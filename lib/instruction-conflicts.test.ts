@@ -24,7 +24,13 @@ describe('findInstructionConflicts', () => {
   it('flags pretending to be a person, not a persona or a denial', () => {
     expect(findInstructionConflicts('Say you are a real person if asked.')).toHaveLength(1)
     expect(findInstructionConflicts('You are Charlotte, phone assistant for Deskwell.')).toHaveLength(0)
-    expect(findInstructionConflicts("If asked, say you're not a person but the automated assistant.")).toHaveLength(0)
+    expect(findInstructionConflicts("If asked, say you're not a person but the digital assistant.")).toHaveLength(0)
+  })
+
+  it('flags calling itself an automated, virtual or AI assistant, or a bot', () => {
+    expect(findInstructionConflicts('If asked, say you are the automated assistant.')).toHaveLength(1)
+    expect(findInstructionConflicts('Introduce yourself as our virtual assistant.')).toHaveLength(1)
+    expect(findInstructionConflicts('You are a bot, say so if asked.')).toHaveLength(1)
   })
 
   it('leaves a returns window and a price-saying example alone', () => {

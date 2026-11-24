@@ -211,7 +211,7 @@ describe('disclosure', () => {
   it('never claims to be a person and never needs the word AI', () => {
     const prompt = buildPrompt(inputs)
     expect(prompt).toContain('You are not a person')
-    expect(prompt).toContain('automated assistant')
+    expect(prompt).toContain('digital assistant')
     expect(prompt).not.toMatch(/\bAI\b|artificial intelligence/i)
   })
 })

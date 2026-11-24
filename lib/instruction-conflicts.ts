@@ -66,7 +66,14 @@ const RULES: Rule[] = [
     test: /\b(you are|you're|say you are|say you're|pretend( to be)?|act as)\b[^.\n]{0,30}\b(real |human |actual )?(person|human|member of (the )?staff|employee)\b/i,
     skipWhenNegated: true,
     advice:
-      'Callers must never be told, or led to believe, that they are talking to a person. The built-in rules have the assistant say plainly that it is the automated assistant when asked. A name and persona are fine.',
+      'Callers must never be told, or led to believe, that they are talking to a person. The built-in rules have the assistant say plainly that it is the digital assistant when asked. A name and persona are fine.',
+  },
+  {
+    // The owner's chosen wording: "digital assistant", never "automated".
+    // Kept in step with the chat assistant's copy of this rule.
+    test: /\b(automated|automatic|ai|robot|bot|chat ?bot|virtual)\s+(assistant|agent|helper|bot)\b|\b(you are|you're|say you are|call yourself)\s+an?\s+(bot|chat ?bot|robot|ai)\b/i,
+    advice:
+      'The assistant always calls itself a digital assistant. A line telling it to call itself an automated or virtual assistant, a bot or an AI fights that. Leave how it describes itself to the built-in rules.',
   },
   {
     // "Returns are raised on the order page, not by phone": written before the

@@ -118,7 +118,7 @@ export function attachUrl(sessionId: string): string {
   return `wss://api.openai.com/v1/live/sessions/${encodeURIComponent(sessionId)}/attach`
 }
 
-const SUMMARY_INSTRUCTIONS = `You write the overview a small shop's staff read at the top of a phone call their automated assistant took. Two or three plain sentences in British English: what the caller wanted, what they were told or sent, and anything the shop still needs to do. No greeting, no bullet points, no prices or order details beyond what is needed to follow up.`
+const SUMMARY_INSTRUCTIONS = `You write the overview a small shop's staff read at the top of a phone call their digital assistant took. Two or three plain sentences in British English: what the caller wanted, what they were told or sent, and anything the shop still needs to do. No greeting, no bullet points, no prices or order details beyond what is needed to follow up.`
 
 type ResponsesOutput = { output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> }
 

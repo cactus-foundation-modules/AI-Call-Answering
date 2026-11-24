@@ -23,7 +23,7 @@ A voice assistant that answers your phone. Built on the [Twilio module](https://
 - **Lists what it could not answer.** Every question it had no answer for lands on the Unanswered tab, noted by the assistant or spotted in the transcript afterwards, with a notification each Monday.
 - **Takes a message for anything it cannot handle**: the caller's name and email (read back to them to be sure), and what it is about. You are notified, and it stays flagged until you mark it done.
 - **Writes up every call** in the unified inbox with a summary, who called, which orders were checked, any callback details, and the full transcript, with each lookup the assistant made shown where it happened (order lookups are reduced to whether they matched).
-- **Never passes itself off as a person.** Asked, it says plainly it is the shop's automated assistant.
+- **Never passes itself off as a person.** Asked, it says plainly it is the shop's digital assistant, never an automated or virtual one.
 - **Keeps itself up to date.** After a module update an hourly job pushes the new wording and tools to ElevenLabs, provided no setting has changed since the assistant was last set up (a changed setting still waits for you to press the button) and no call is in progress.
 - **Warns about clashing instructions.** The Extra instructions box flags lines that fight the built-in rules: payment or invoice facts the tools read live, web addresses, fixed delivery times, prices, or telling it to pass as a person.
 

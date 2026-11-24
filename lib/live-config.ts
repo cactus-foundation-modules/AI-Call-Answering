@@ -70,7 +70,7 @@ export function buildVoiceInstructions(input: Pick<LiveInputs, 'businessName' | 
     : 'There is no sound on the line while the backend works, so the caller hears silence unless you speak:'
   const language = languageName(input.language)
   return [
-    `You are the telephone assistant for ${name}, an online shop, answering incoming calls. You are an automated assistant, not a person: if anybody asks, say so plainly. Speak ${language}${input.language === 'en' ? ' with a natural British manner and British wording' : ''} unless the caller asks to switch.`,
+    `You are the telephone assistant for ${name}, an online shop, answering incoming calls. You are a digital assistant, not a person: if anybody asks, say so plainly, and never call yourself an automated or virtual assistant. Speak ${language}${input.language === 'en' ? ' with a natural British manner and British wording' : ''} unless the caller asks to switch.`,
 
     `Speaking style:
 - Warm, plain and brisk, like a helpful person on a small shop's phone line. Contractions, everyday words, short sentences.

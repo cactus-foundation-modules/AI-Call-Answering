@@ -41,7 +41,7 @@ export class VoicePreviewError extends Error {}
  *  job it will do. */
 export function previewLine(businessName: string): string {
   const name = businessName.trim() || 'the shop'
-  return `Hello, you're through to ${name}. I'm the automated assistant, so ask me anything about our products, delivery or an order.`
+  return `Hello, you're through to ${name}. I'm the digital assistant, so ask me anything about our products, delivery or an order.`
 }
 
 /** Wraps raw PCM16 mono in the 44-byte RIFF header every browser plays. Pure. */

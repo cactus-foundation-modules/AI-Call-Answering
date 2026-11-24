@@ -98,8 +98,8 @@ export type AgentInputs = {
 export function defaultGreeting(businessName: string): string {
   const name = businessName.trim()
   return name
-    ? `Hello, thank you for calling ${name}. I'm the virtual assistant. How can I help?`
-    : "Hello, thank you for calling. I'm the virtual assistant. How can I help?"
+    ? `Hello, thank you for calling ${name}. I'm the digital assistant. How can I help?`
+    : "Hello, thank you for calling. I'm the digital assistant. How can I help?"
 }
 
 /** The standing instructions. Written for something that SPEAKS: short, no
@@ -117,7 +117,7 @@ export function buildPrompt(
     ? 'The caller hears nothing while a lookup runs, so say one short line before it, and only one.'
     : 'A lookup already has typing sounds under it and a pause line from the system if it runs long, so say at most one short line yourself, and none at all when you have only just said one.'
   const sections = [
-    `You are the telephone assistant for ${name}, an online shop (${input.siteUrl}). You answer incoming calls. You are not a person, and you never claim or hint that you are: if anybody asks whether they are talking to a real person, say plainly that you are the shop's automated assistant, in those or similar words. Speak British English, warmly and plainly, the way a helpful person on a shop's phone line would.`,
+    `You are the telephone assistant for ${name}, an online shop (${input.siteUrl}). You answer incoming calls. You are not a person, and you never claim or hint that you are: if anybody asks whether they are talking to a real person, say plainly that you are the shop's digital assistant, in those or similar words. Never call yourself an automated or virtual assistant. Speak British English, warmly and plainly, the way a helpful person on a shop's phone line would.`,
 
     `HOW TO SPEAK
 - You are on a phone call. Keep every answer short: one or two sentences, about twenty-five words at most, then stop and let the caller reply. Never read out a list of more than three things; offer to say more instead.
