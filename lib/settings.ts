@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
+import { SILENCE_HANG_UP_DEFAULT_SECONDS } from './agent-config'
 
 // ---------------------------------------------------------------------------
 // Module settings, resolved env-first.
@@ -46,6 +47,20 @@ export const LANGUAGE_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
 ]
 
 export const MAX_CALL_MINUTES_LIMIT = 60
+
+/** Seconds of silence on the line before the assistant says goodbye and hangs
+ *  up. 0 switches it off; anything else is kept between the bounds, short
+ *  enough to stop a dead line running up the bill, long enough for a caller
+ *  fetching an order number. */
+export { SILENCE_HANG_UP_DEFAULT_SECONDS }
+export const SILENCE_HANG_UP_MIN_SECONDS = 10
+export const SILENCE_HANG_UP_MAX_SECONDS = 300
+
+export function clampSilenceSeconds(value: number): number {
+  const seconds = Math.round(value)
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0
+  return Math.min(Math.max(seconds, SILENCE_HANG_UP_MIN_SECONDS), SILENCE_HANG_UP_MAX_SECONDS)
+}
 
 // ---------------------------------------------------------------------------
 // GPT-Live, the second engine. OpenAI's own voice model answers the call and
@@ -169,6 +184,8 @@ export type AiCallSettings = {
   extraInstructions: string
   emailSignature: string
   maxCallMinutes: number
+  /** Seconds of silence before the call is ended; 0 is off. */
+  silenceHangUpSeconds: number
   postCallWebhookId: string | null
   webhookSecret: string | null
   toolsToken: string | null
@@ -237,6 +254,9 @@ export async function getSettings(): Promise<AiCallSettings> {
     extraInstructions: str(row?.extra_instructions) ?? '',
     emailSignature: str(row?.email_signature) ?? '',
     maxCallMinutes: Math.min(Math.max(minutes, 1), MAX_CALL_MINUTES_LIMIT),
+    silenceHangUpSeconds: typeof row?.silence_hang_up_seconds === 'number'
+      ? clampSilenceSeconds(row.silence_hang_up_seconds)
+      : SILENCE_HANG_UP_DEFAULT_SECONDS,
     postCallWebhookId: str(row?.post_call_webhook_id),
     webhookSecret: tryDecryptSecret(str(row?.webhook_secret_encrypted)),
     toolsToken: tryDecryptSecret(str(row?.tools_token_encrypted)),
@@ -285,6 +305,7 @@ export type SettingsPatch = {
   extraInstructions?: string
   emailSignature?: string
   maxCallMinutes?: number
+  silenceHangUpSeconds?: number
   engine?: Engine
   openaiApiKey?: string
   clearOpenaiApiKey?: boolean
@@ -336,6 +357,10 @@ export async function updateSettings(patch: SettingsPatch): Promise<void> {
   if (patch.maxCallMinutes !== undefined) {
     const minutes = Math.min(Math.max(Math.round(patch.maxCallMinutes), 1), MAX_CALL_MINUTES_LIMIT)
     await prisma.$executeRaw`UPDATE "acall_settings" SET "max_call_minutes" = ${minutes} WHERE "id" = 'singleton'`
+  }
+  if (patch.silenceHangUpSeconds !== undefined) {
+    const seconds = clampSilenceSeconds(patch.silenceHangUpSeconds)
+    await prisma.$executeRaw`UPDATE "acall_settings" SET "silence_hang_up_seconds" = ${seconds} WHERE "id" = 'singleton'`
   }
   if (patch.engine !== undefined) {
     await prisma.$executeRaw`UPDATE "acall_settings" SET "engine" = ${patch.engine} WHERE "id" = 'singleton'`

@@ -7,6 +7,7 @@ import {
   buildToolConfig,
   configHash,
   onlyCodeChanged,
+  SILENCE_HANG_UP_DEFAULT_SECONDS,
   defaultGreeting,
   isToolName,
   thinkingFiller,
@@ -23,6 +24,7 @@ const inputs: AgentInputs = {
   llm: 'claude-sonnet-5-5',
   language: 'en',
   maxCallMinutes: 15,
+  silenceHangUpSeconds: SILENCE_HANG_UP_DEFAULT_SECONDS,
   toolsToken: 'secret-token',
   toolIds: Object.fromEntries(TOOL_NAMES.map((name) => [name, `id_${name}`])),
   postCallWebhookId: 'wh_1',
@@ -176,6 +178,8 @@ describe('onlyCodeChanged', () => {
   const legacy = (input: AgentInputs, revision: number) => {
     const comparable: Partial<AgentInputs> = { ...input }
     delete comparable.toolsToken
+    // Those versions had no silence setting at all.
+    delete comparable.silenceHangUpSeconds
     return createHash('sha256').update(JSON.stringify({ ...comparable, revision })).digest('hex').slice(0, 32)
   }
 
@@ -236,5 +240,22 @@ describe('tool schemas', () => {
       const config = buildToolConfig(name, 'https://example.co.uk', 'token') as { api_schema: { request_body_schema: { properties: Record<string, unknown> } } }
       expect(missing(config.api_schema.request_body_schema.properties, name)).toEqual([])
     }
+  })
+})
+
+describe('silence hang-up', () => {
+  const turn = (input: AgentInputs) => (buildAgentBody(input).conversation_config as { turn: { silence_end_call_timeout: number } }).turn
+  it('hands ElevenLabs the site\'s figure, or -1 for never', () => {
+    expect(turn(inputs).silence_end_call_timeout).toBe(30)
+    expect(turn({ ...inputs, silenceHangUpSeconds: 90 }).silence_end_call_timeout).toBe(90)
+    expect(turn({ ...inputs, silenceHangUpSeconds: 0 }).silence_end_call_timeout).toBe(-1)
+  })
+  it('leaves a site on the default free for the unattended update, but not one that changed it', () => {
+    // Set up before the setting existed: the owner half had no such field.
+    const before: Partial<AgentInputs> = { ...inputs }
+    delete before.silenceHangUpSeconds
+    const [ownerBefore] = configHash(before as AgentInputs).split('.')
+    expect(onlyCodeChanged(inputs, `${ownerBefore}.olderversion`)).toBe(true)
+    expect(onlyCodeChanged({ ...inputs, silenceHangUpSeconds: 60 }, `${ownerBefore}.olderversion`)).toBe(false)
   })
 })

@@ -88,6 +88,7 @@ export async function POST(request: NextRequest) {
     greeting: liveGreetingInstruction(inputs),
     backendModel: settings.liveBackendModel,
     maxCallMinutes: settings.maxCallMinutes,
+    silenceHangUpSeconds: settings.silenceHangUpSeconds,
     typingSound: settings.liveTypingSound,
   }))
   return NextResponse.json({ ok: true, accepted: true })

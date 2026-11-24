@@ -54,6 +54,9 @@ type State = {
   llms: Choice[]
   languages: Choice[]
   maxCallMinutesLimit: number
+  silenceHangUpSeconds: number
+  silenceHangUpMinSeconds: number
+  silenceHangUpMaxSeconds: number
   fallbackKeys: Array<{ id: string; label: string; isSetUp: boolean; needsSetup: boolean }>
   maxFallbackKeys: number
   engine: Engine
@@ -87,6 +90,7 @@ type Draft = {
   extraInstructions: string
   emailSignature: string
   maxCallMinutes: number
+  silenceHangUpSeconds: number
   engine: Engine
   openaiApiKey: string
   openaiProjectId: string
@@ -142,6 +146,7 @@ function draftOf(state: State): Draft {
     extraInstructions: state.extraInstructions,
     emailSignature: state.emailSignature,
     maxCallMinutes: state.maxCallMinutes,
+    silenceHangUpSeconds: state.silenceHangUpSeconds,
     engine: state.engine,
     // Secrets are never sent back, as with the ElevenLabs key.
     openaiApiKey: '',
@@ -246,6 +251,7 @@ function AssistantSection() {
       extraInstructions: draft.extraInstructions,
       emailSignature: draft.emailSignature,
       maxCallMinutes: draft.maxCallMinutes,
+      silenceHangUpSeconds: draft.silenceHangUpSeconds,
       engine: draft.engine,
       openaiProjectId: draft.openaiProjectId,
       liveVoice: draft.liveVoice,
@@ -609,6 +615,19 @@ function AssistantSection() {
             <input type="number" min={1} max={saved.maxCallMinutesLimit} value={draft.maxCallMinutes} style={{ maxWidth: '8rem' }}
               onChange={(e) => set('maxCallMinutes', Math.min(Math.max(Number(e.target.value) || 1, 1), saved.maxCallMinutesLimit))} />
             <p className="field-hint">The assistant ends a call that runs past this. {liveDraft ? 'OpenAI' : 'ElevenLabs'} charges by the minute.</p>
+          </div>
+          <div className="field">
+            <label>Hang up after silence (seconds)</label>
+            <input type="number" min={0} max={saved.silenceHangUpMaxSeconds} value={draft.silenceHangUpSeconds} style={{ maxWidth: '8rem' }}
+              onChange={(e) => set('silenceHangUpSeconds', Math.max(Math.round(Number(e.target.value) || 0), 0))}
+              onBlur={() => {
+                const seconds = draft.silenceHangUpSeconds
+                if (seconds > 0) set('silenceHangUpSeconds', Math.min(Math.max(seconds, saved.silenceHangUpMinSeconds), saved.silenceHangUpMaxSeconds))
+              }} />
+            <p className="field-hint">
+              If nobody says anything for this long, the assistant says goodbye and puts the phone down, so a silent line does not run to the longest call.
+              Between {saved.silenceHangUpMinSeconds} and {saved.silenceHangUpMaxSeconds}, or 0 to never do this.
+            </p>
           </div>
         </div>
 

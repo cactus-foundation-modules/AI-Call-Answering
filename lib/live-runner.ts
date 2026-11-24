@@ -41,6 +41,8 @@ export type LiveRunInput = {
   greeting: string
   backendModel: string
   maxCallMinutes: number
+  /** Seconds of silence on the line before the call is wound up; 0 is off. */
+  silenceHangUpSeconds: number
   /** The site has the typing sound on, so the call should be in a conference. */
   typingSound: boolean
 }
@@ -160,6 +162,7 @@ export async function runLiveCall(input: LiveRunInput): Promise<void> {
     log: (message, detail) => console.error(`${LOG} ${message}`, detail ?? ''),
     workingStarted: typing ? () => typing.start() : undefined,
     workingStopped: typing ? () => typing.stop() : undefined,
+    silenceHangUpMs: Math.max(0, input.silenceHangUpSeconds) * 1_000,
   }, input.greeting)
 
   try {
@@ -173,6 +176,7 @@ export async function runLiveCall(input: LiveRunInput): Promise<void> {
         // session.started has usually gone by before the socket attaches and is
         // only replayed if it was in the last three seconds.
         timers.push(setTimeout(() => session.greet(), 1_000))
+        session.watchSilence()
         const limitMs = Math.max(1, input.maxCallMinutes) * 60_000
         timers.push(setTimeout(() => {
           session.instruct(wrapUpInstruction())

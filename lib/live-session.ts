@@ -76,12 +76,30 @@ export type SessionDeps = {
   /** Longest one stretch of typing plays. A lookup that slow is better met
    *  with silence than an endless keyboard. */
   typingMaxMs?: number
+  /** How long the line may be silent before the call is wound up: nothing from
+   *  the caller, and the voice neither talking nor waiting on a lookup. 0 or
+   *  absent leaves it off. */
+  silenceHangUpMs?: number
+  /** How often the silence is measured. */
+  silenceTickMs?: number
 }
 
 /** What the voice is told when the call reaches the site's time limit. */
 export function wrapUpInstruction(): string {
   return 'The call has reached its time limit. Tell the caller politely that you need to end the call now, offer to take a message if they still need help, then say goodbye.'
 }
+
+/** What the voice is told when the line has been silent too long. */
+export function silenceGoodbyeInstruction(): string {
+  return 'The caller has said nothing for a while and the line seems to be silent. Say briefly that you cannot hear anyone so you will end the call, and that they are welcome to call back. Then say goodbye. Do not wait for a reply.'
+}
+
+/** Words the voice says this soon after its last transcript fragment count as
+ *  it still talking: fragments arrive in bursts, not once per word. */
+const SPEAKING_GRACE_MS = 1_500
+
+/** Time for the voice to start a goodbye it has just been asked for. */
+const GOODBYE_LEAD_MS = 3_000
 
 export class LiveSession {
   readonly transcript = new TranscriptBuilder()
@@ -107,6 +125,12 @@ export class LiveSession {
   private typing = false
   private typingQuietTimer: ReturnType<typeof setTimeout> | null = null
   private typingLimitTimer: ReturnType<typeof setTimeout> | null = null
+  private silenceTimer: ReturnType<typeof setInterval> | null = null
+  /** Silence counted so far, in ms. Reset by any word from the caller. */
+  private quietMs = 0
+  private callerSpoke = false
+  /** Set once the silence limit has wound the call up. */
+  endedForSilence = false
 
   constructor(private readonly deps: SessionDeps, private readonly greeting: string) {}
 
@@ -139,6 +163,7 @@ export class LiveSession {
         this.greet()
         return
       case 'session.input_transcript.delta':
+        if (text(event.delta).trim()) this.callerSpoke = true
         this.transcript.add('caller', text(event.delta), typeof event.start_ms === 'number' ? event.start_ms : null)
         return
       case 'session.output_transcript.delta':
@@ -257,15 +282,16 @@ export class LiveSession {
   }
 
   /** Waits for the goodbye to finish (no new words for a moment), then puts the
-   *  phone down. */
-  scheduleHangUp(): void {
+   *  phone down. leadMs gives a goodbye that has only just been asked for time
+   *  to start before the quiet is measured. */
+  scheduleHangUp(leadMs = 0): void {
     if (this.hangingUp) return
     this.hangingUp = true
     this.endTyping()
     const quietMs = this.deps.hangUpQuietMs ?? 2_500
     const maxWaitMs = this.deps.hangUpMaxWaitMs ?? 15_000
     const startedAt = Date.now()
-    this.lastSpokeAt = Math.max(this.lastSpokeAt, startedAt)
+    this.lastSpokeAt = Math.max(this.lastSpokeAt, startedAt + leadMs)
     const check = () => {
       if (this.closed) return
       const now = Date.now()
@@ -275,13 +301,50 @@ export class LiveSession {
       }
       setTimeout(check, 250)
     }
-    setTimeout(check, quietMs)
+    setTimeout(check, quietMs + leadMs)
+  }
+
+  /** Starts measuring silence on the line, if the site has a limit. Time only
+   *  counts while nobody is doing anything: the voice talking (asking whether
+   *  anyone is there, say) or a lookup being worked on pauses the count, and
+   *  any word from the caller starts it again from nothing. */
+  watchSilence(): void {
+    const limitMs = this.deps.silenceHangUpMs ?? 0
+    if (limitMs <= 0 || this.silenceTimer || this.closed) return
+    const tickMs = this.deps.silenceTickMs ?? 1_000
+    this.silenceTimer = setInterval(() => {
+      if (this.closed || this.hangingUp) {
+        this.stopSilenceWatch()
+        return
+      }
+      if (this.callerSpoke) {
+        this.callerSpoke = false
+        this.quietMs = 0
+        return
+      }
+      const voiceTalking = Date.now() - this.lastSpokeAt < SPEAKING_GRACE_MS
+      const working = this.openDelegations.size > 0 || this.awaitingResults.size > 0
+      if (voiceTalking || working) return
+      this.quietMs += tickMs
+      if (this.quietMs < limitMs) return
+      this.stopSilenceWatch()
+      this.endedForSilence = true
+      this.deps.log(`line silent for ${Math.round(limitMs / 1000)}s, ending the call`)
+      this.instruct(silenceGoodbyeInstruction())
+      this.scheduleHangUp(GOODBYE_LEAD_MS)
+    }, tickMs)
+  }
+
+  private stopSilenceWatch(): void {
+    if (this.silenceTimer) clearInterval(this.silenceTimer)
+    this.silenceTimer = null
   }
 
   /** Stops every timer, for when the socket has gone. */
   dispose(): void {
     for (const timer of this.flushTimers.values()) clearTimeout(timer)
     this.flushTimers.clear()
+    this.stopSilenceWatch()
     this.closed = true
     this.endTyping()
   }

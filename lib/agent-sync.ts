@@ -56,6 +56,7 @@ export function agentInputsFrom(
     llm: settings.llm,
     language: settings.language,
     maxCallMinutes: settings.maxCallMinutes,
+    silenceHangUpSeconds: settings.silenceHangUpSeconds,
     toolsToken,
     toolIds,
     postCallWebhookId,

@@ -73,6 +73,11 @@ export function thinkingFiller(language: string): string {
   return THINKING_FILLER[language] ?? THINKING_FILLER.en!
 }
 
+/** Seconds of silence on the line before the call is ended, unless the site
+ *  picks another figure (lib/settings.ts holds the bounds). Here rather than
+ *  there so this file stays free of the database. */
+export const SILENCE_HANG_UP_DEFAULT_SECONDS = 30
+
 export type AgentInputs = {
   businessName: string
   siteUrl: string
@@ -83,6 +88,8 @@ export type AgentInputs = {
   llm: string
   language: string
   maxCallMinutes: number
+  /** Seconds of silence before the call is ended; 0 is off. */
+  silenceHangUpSeconds: number
   toolsToken: string
   toolIds: Record<string, string>
   postCallWebhookId: string
@@ -580,7 +587,8 @@ export function buildAgentBody(input: AgentInputs): Record<string, unknown> {
       asr: { user_input_audio_format: 'ulaw_8000' },
       turn: {
         turn_timeout: 7,
-        silence_end_call_timeout: 25,
+        // ElevenLabs takes -1 for "never".
+        silence_end_call_timeout: input.silenceHangUpSeconds > 0 ? input.silenceHangUpSeconds : -1,
         // Covers the wait for the model; the typing sound covers the wait for a tool.
         soft_timeout_config: {
           timeout_seconds: THINKING_FILLER_AFTER_SECS,
@@ -623,6 +631,10 @@ export function buildAgentBody(input: AgentInputs): Record<string, unknown> {
 function comparableInputs(input: AgentInputs): Partial<AgentInputs> {
   const comparable: Partial<AgentInputs> = { ...input }
   delete comparable.toolsToken
+  // Added after sites were set up. Left at the default it is not a setting
+  // anybody changed, so the hourly job may push it unattended; a site that
+  // picks another value pushes it themselves, as with any other setting.
+  if (comparable.silenceHangUpSeconds === SILENCE_HANG_UP_DEFAULT_SECONDS) delete comparable.silenceHangUpSeconds
   return comparable
 }
 
@@ -642,6 +654,7 @@ const FINGERPRINT_INPUTS: AgentInputs = {
   llm: 'llm',
   language: 'en',
   maxCallMinutes: 15,
+  silenceHangUpSeconds: SILENCE_HANG_UP_DEFAULT_SECONDS,
   toolsToken: 'token',
   toolIds: {},
   postCallWebhookId: 'webhook',

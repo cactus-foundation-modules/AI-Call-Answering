@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LiveSession, TranscriptBuilder } from './live-session'
+import { LiveSession, TranscriptBuilder, silenceGoodbyeInstruction } from './live-session'
 
 type Sent = Record<string, unknown>
 
-function harness(runTool: (name: string, args: Record<string, unknown>) => Promise<string> = async () => '{"ok":true}') {
+function harness(
+  runTool: (name: string, args: Record<string, unknown>) => Promise<string> = async () => '{"ok":true}',
+  silenceHangUpMs = 0,
+) {
   const sent: Sent[] = []
   const hangUp = vi.fn(async () => undefined)
   const tool = vi.fn(runTool)
@@ -14,6 +17,7 @@ function harness(runTool: (name: string, args: Record<string, unknown>) => Promi
     log: () => undefined,
     hangUpQuietMs: 100,
     hangUpMaxWaitMs: 1_000,
+    silenceHangUpMs,
   }, 'Greet the caller.')
   return { session, sent, hangUp, tool }
 }
@@ -127,5 +131,67 @@ describe('LiveSession', () => {
     expect(session.closeReason).toBe('remote_hangup')
     expect(session.usage.seconds).toBe(42)
     expect(session.transcript.result()).toHaveLength(2)
+  })
+
+  describe('silence on the line', () => {
+    const asked = (sent: Sent[]) => sent.some((event) => event.type === 'session.instructions.append' && event.content === silenceGoodbyeInstruction())
+    let n = 0
+    const callerSays = (session: LiveSession, delta: string) => session.handle({ type: 'session.input_transcript.delta', event_id: `in${n++}`, delta, start_ms: 0 })
+    const voiceSays = (session: LiveSession, delta: string) => session.handle({ type: 'session.output_transcript.delta', event_id: `out${n++}`, delta, start_ms: 0 })
+
+    it('says goodbye and hangs up once nobody has said anything for the limit', async () => {
+      const { session, sent, hangUp } = harness(undefined, 30_000)
+      session.watchSilence()
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(asked(sent)).toBe(false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(asked(sent)).toBe(true)
+      expect(session.endedForSilence).toBe(true)
+      expect(hangUp).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(hangUp).toHaveBeenCalledTimes(1)
+    })
+
+    it('starts counting again whenever the caller speaks', async () => {
+      const { session, sent } = harness(undefined, 30_000)
+      session.watchSilence()
+      await vi.advanceTimersByTimeAsync(25_000)
+      callerSays(session, 'Hello?')
+      await vi.advanceTimersByTimeAsync(25_000)
+      expect(asked(sent)).toBe(false)
+      await vi.advanceTimersByTimeAsync(7_000)
+      expect(asked(sent)).toBe(true)
+    })
+
+    it('does not count while the voice is talking or a lookup is being worked on', async () => {
+      const { session, sent } = harness(async () => new Promise<string>(() => undefined), 10_000)
+      session.watchSilence()
+      // Twenty seconds of the voice asking whether anybody is there.
+      for (let i = 0; i < 20; i++) {
+        voiceSays(session, 'Are you still there? ')
+        await vi.advanceTimersByTimeAsync(1_000)
+      }
+      expect(asked(sent)).toBe(false)
+      // A lookup that never finishes holds the count as well.
+      session.handle(functionCall('l1', 'd9', 'c9', 'search_products', { query: 'desk' }))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(asked(sent)).toBe(false)
+    })
+
+    it('never hangs up for silence when the site has it off', async () => {
+      const { session, sent, hangUp } = harness(undefined, 0)
+      session.watchSilence()
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(asked(sent)).toBe(false)
+      expect(hangUp).not.toHaveBeenCalled()
+    })
+
+    it('stops watching once the call has closed', async () => {
+      const { session, sent } = harness(undefined, 10_000)
+      session.watchSilence()
+      session.handle({ type: 'session.closed', event_id: 'closed1', reason: 'remote_hangup' })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(asked(sent)).toBe(false)
+    })
   })
 })
