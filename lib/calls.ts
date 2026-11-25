@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/prisma'
+import { MAX_DISCUSSED_PRODUCTS, parseDiscussedProducts, type DiscussedProduct } from './discussed-products'
 import { parseToolLog, type ToolLogEntry } from './tool-log'
 
 // The record of each call the assistant took. One row per Twilio call, opened
@@ -40,6 +41,8 @@ export type CallRecord = {
   emailedTo: string
   /** What the assistant looked up, in order. */
   toolLog: ToolLogEntry[]
+  /** The products this call has been about, newest last (lib/discussed-products.ts). */
+  discussedProducts: DiscussedProduct[]
   updatedAt: Date
 }
 
@@ -49,7 +52,7 @@ const COLUMNS = `
   id, call_sid, conversation_id, from_number, to_number, status, started_at, duration_seconds,
   summary, transcript, caller_name, caller_email, caller_phone, callback_needed, callback_reason,
   handled_at, read_at, verified_orders, verified_contact_name, verified_contact_email,
-  verified_contact_phone, failed_order_checks, emails_sent, emailed_to, tool_log, updated_at
+  verified_contact_phone, failed_order_checks, emails_sent, emailed_to, tool_log, discussed_products, updated_at
 `
 
 function parseTranscript(value: unknown): TranscriptTurn[] {
@@ -93,6 +96,7 @@ export function mapCall(row: Record<string, unknown>): CallRecord {
     emailsSent: Number(row.emails_sent ?? 0),
     emailedTo: (row.emailed_to as string | null) ?? '',
     toolLog: parseToolLog(row.tool_log),
+    discussedProducts: parseDiscussedProducts(row.discussed_products),
     updatedAt: row.updated_at as Date,
   }
 }
@@ -132,6 +136,15 @@ export type CallUsage = {
   cachedTokens: number
   outputTokens: number
   responses: number
+}
+
+/** Keeps the call's list of the products it has been about
+ *  (lib/discussed-products.ts), replacing what was there. */
+export async function saveDiscussedProducts(callId: string, products: readonly DiscussedProduct[]): Promise<void> {
+  const json = JSON.stringify(products.slice(-MAX_DISCUSSED_PRODUCTS))
+  await prisma.$executeRaw`
+    UPDATE "acall_calls" SET "discussed_products" = ${json}::jsonb, "updated_at" = CURRENT_TIMESTAMP WHERE "id" = ${callId}
+  `
 }
 
 export async function recordUsage(callId: string, usage: CallUsage): Promise<void> {

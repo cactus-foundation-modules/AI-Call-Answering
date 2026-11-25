@@ -8,9 +8,11 @@ import {
   recordFailedOrderCheck,
   recordVerifiedContact,
   recordVerifiedOrder,
+  saveDiscussedProducts,
   callerLabel,
   type CallRecord,
 } from './calls'
+import { fromProductDetail, fromSkuHits, rememberProducts, type DiscussedProduct } from './discussed-products'
 import { lookupOrders, lookupOrdersByCallerNumber } from './order-queries'
 import { emailOrderLink } from './order-link'
 import { callerOrdersMissMessage, callerOrdersNote } from './caller-orders'
@@ -197,6 +199,20 @@ async function resolveCall(identity: z.infer<typeof CallIdentity>): Promise<Call
   return call
 }
 
+/** Adds what a product tool found to the call's list of products discussed,
+ *  so a note emailed later lists them even when the model forgets to say
+ *  which (lib/discussed-products.ts). A list that cannot be saved never costs
+ *  the caller their answer. */
+async function rememberDiscussed(identity: z.infer<typeof CallIdentity>, found: readonly DiscussedProduct[]): Promise<void> {
+  if (found.length === 0 || (!identity.call_sid && !identity.conversation_id)) return
+  try {
+    const call = await findCall({ callSid: identity.call_sid, conversationId: identity.conversation_id })
+    if (call) await saveDiscussedProducts(call.id, rememberProducts(call.discussedProducts, found))
+  } catch (error) {
+    console.error('[ai-call-answering] could not remember the products discussed', error)
+  }
+}
+
 function blankToNull(value: string | undefined): string | null {
   return value && value.trim() !== '' ? value.trim() : null
 }
@@ -367,12 +383,14 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const input = SkuInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       const { hits, note } = await findBySku(input.data.sku)
+      await rememberDiscussed(input.data, fromSkuHits(hits))
       return { result: { ok: true, products: hits, note }, callbackSaved: null }
     }
     case 'get_product': {
       const input = ProductInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       const detail = await getProductDetail(input.data.product_id, blankToNull(input.data.options), input.data.quantity ?? null)
+      if (detail) await rememberDiscussed(input.data, fromProductDetail(detail))
       return {
         result: detail
           ? { ok: true, product: detail }

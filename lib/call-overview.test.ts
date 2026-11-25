@@ -29,6 +29,7 @@ const base: CallRecord = {
   emailsSent: 0,
   emailedTo: '',
   toolLog: [],
+  discussedProducts: [],
   updatedAt: new Date('2026-10-18T10:02:00Z'),
 }
 

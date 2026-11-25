@@ -12,8 +12,8 @@ import type { TestDatabase, TestRole, VpsConfig } from '@/lib/backup/vps-databas
 //
 // Covers every statement that touches this module's own tables: settings
 // (encrypted secrets, tool ids), number assignments, the call record from
-// opening to completion, the inbox provider's listing, paging and thread, and
-// the post-call filing. Shop reads are covered separately by running them
+// opening to completion (with the products it was about), the inbox
+// provider's listing, paging and thread, and the post-call filing. Shop reads are covered separately by running them
 // against a copy of a real catalogue; they never write.
 //
 // It provisions its OWN throwaway database on the self-hosted Postgres VPS
@@ -178,6 +178,17 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
     expect(await mod.calls.recentFailedChecksFrom('+447700900123')).toBe(2)
     expect(await mod.calls.recentFailedChecksFrom('+440000000000')).toBe(0)
     expect(await mod.calls.recentFailedChecksFrom('')).toBe(0)
+  })
+
+  it('keeps the products a call was about, and reads them back with the call', async () => {
+    expect((await mod.calls.getCall(callId))?.discussedProducts).toEqual([])
+    const list = [{ id: 'chair', parentId: null }, { id: 'desk-black', parentId: 'desk' }]
+    await mod.calls.saveDiscussedProducts(callId, list)
+    expect((await mod.calls.findCall({ callSid: 'CA1' }))?.discussedProducts).toEqual(list)
+    await mod.calls.saveDiscussedProducts(callId, Array.from({ length: 14 }, (_, i) => ({ id: `p${i}`, parentId: null })))
+    const kept = (await mod.calls.getCall(callId))?.discussedProducts ?? []
+    expect(kept).toHaveLength(10)
+    expect(kept[9]?.id).toBe('p13')
   })
 
   it('completes a call with a transcript', async () => {

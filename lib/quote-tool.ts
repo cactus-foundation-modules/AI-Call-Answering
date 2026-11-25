@@ -1,6 +1,7 @@
 import { callerLabel, recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
 import { MAX_EMAILS_PER_CALL, MAX_EMAILS_PER_NUMBER_PER_HOUR } from './call-email'
 import { getCallBasket, recordBasketQuote } from './phone-basket'
+import { titleCaseName } from './name-case'
 import { saveQuote } from './quote-saver'
 import { isPlausibleEmail } from './text'
 
@@ -37,7 +38,7 @@ export async function saveBasketQuote(call: CallRecord, input: { name: string | 
     return { ok: false, message: 'Enough quotes have been saved on this call. Do not try again. Offer a callback so the team can send a final one.' }
   }
 
-  const name = (input.name ?? '').trim() || call.verifiedContact.name.trim()
+  const name = titleCaseName((input.name ?? '').trim() || call.verifiedContact.name.trim())
   const email = ((input.email ?? '').trim() || call.verifiedContact.email.trim()).toLowerCase()
   if (!name) return { ok: false, message: 'I need the caller\'s name for the quote. Ask for it and retry.' }
   if (!email || !isPlausibleEmail(email)) {

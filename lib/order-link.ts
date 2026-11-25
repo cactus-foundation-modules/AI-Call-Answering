@@ -3,6 +3,7 @@ import { getShopConfigCached } from '@/modules/shop/lib/config'
 import { orderUrlVars } from '@/modules/shop/lib/email'
 import { orderTrackingUrl } from '@/modules/shop/lib/order-tracking'
 import type { CallRecord } from './calls'
+import { titleCaseName } from './name-case'
 import { normaliseOrderNumber } from './text'
 import { askWhichEmailMessage, chooseOrderEmail } from './email-choice'
 import { emailsOnOrders, nameOnOrderEmail } from './order-queries'
@@ -52,7 +53,7 @@ export async function emailOrderLink(call: CallRecord, requested: string | null,
   }
 
   const sent = await sendTemplateEmail(email, 'ai-call-answering.order-link', {
-    customerName: (await nameOnOrderEmail(call.verifiedOrders, email)) || call.verifiedContact.name || 'there',
+    customerName: titleCaseName((await nameOnOrderEmail(call.verifiedOrders, email)) || call.verifiedContact.name) || 'there',
     orderNumber,
     ...orderUrlVars(url, config),
   })

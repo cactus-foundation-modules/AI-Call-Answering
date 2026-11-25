@@ -4,6 +4,8 @@ import { sendTemplateEmail } from '@/lib/email'
 import { renderProductTable } from '@/modules/unified-inbox/lib/products/render'
 import { resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
+import { productsToSend } from './discussed-products'
+import { titleCaseName } from './name-case'
 import { toProductRefs } from './product-queries'
 import { basketUrl, getCallBasket, type CallBasket } from './phone-basket'
 import { getSettings } from './settings'
@@ -31,6 +33,12 @@ import { pickLinks, unknownLinksMessage, type SiteLink } from './site-links'
 // linked name, the options of a variation, and the price with "+ VAT" where the
 // shop quotes net prices. Order details are never part of it - the tool's description says
 // so, and the address may be one the caller merely spoke.
+//
+// When the model passes no products (or none the shop can show), the note
+// lists the ones this call's product tools settled on (lib/discussed-
+// products.ts), newest first, so a note of a call about a desk never arrives
+// without the desk. The caller's name is greeted in proper case
+// (lib/name-case.ts): "Hi Chris,", not "Hi chris,".
 // ---------------------------------------------------------------------------
 
 export const MAX_EMAILS_PER_CALL = 3
@@ -188,13 +196,21 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
     return { ok: false, message: `Nothing was sent. ${unknownLinksMessage(picked.unknown)} If you cannot find it, tell the caller where it is on the website instead.` }
   }
   const basket = await getCallBasket(call.id)
-  const bare = await toProductRefs(productsForSummary(input.productIds, basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
-  const refs = withDeliveries(bare, input.deliveries, basket, await timingMenus(bare.map((ref) => ref.id)))
-  const resolved = await resolveProducts(refs)
+  const listFor = async (given: readonly string[]) => {
+    const bare = await toProductRefs(productsForSummary(productsToSend(given, call.discussedProducts, MAX_PRODUCTS_PER_EMAIL * 2), basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
+    return resolveProducts(withDeliveries(bare, input.deliveries, basket, await timingMenus(bare.map((ref) => ref.id))))
+  }
+  let resolved = await listFor(input.productIds)
+  if (resolved.length === 0 && input.productIds.length > 0 && call.discussedProducts.length > 0) {
+    // None of the ids the model passed is a product the shop can show: the
+    // call's own record, rather than a note with nothing in it.
+    resolved = await listFor([])
+  }
   const listing = renderProductTable(resolved.map((entry) => entry.choice))
+  const name = input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || ''
 
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
-    customerName: input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || 'there',
+    customerName: titleCaseName(name) || 'there',
     subject: cleanSubject(input.subject),
     summaryHtml: textToHtml(summary) + linksHtml(picked.links) + basketParagraph(basket),
     productsHtml: listing,
