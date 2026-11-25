@@ -92,4 +92,28 @@ describe('pickVariations', () => {
     expect(pickVariations('no arms', rows).fits).toEqual([0])
     expect(pickVariations('folding arms', rows).fits).toEqual([2])
   })
+
+  it('finds a value by the colour family the shop files it under (the live-site blue desk)', () => {
+    const rows = ['White', 'Dark Teal', 'Beech'].flatMap((finish) => ['120cm', '140cm'].map((width) => ({
+      optionNames: ['Width', 'Finish'],
+      optionValues: [width, finish],
+      aliases: [[], finish === 'Dark Teal' ? ['Blue'] : finish === 'Beech' ? ['Wood'] : []],
+      name: '',
+    })))
+    const pick = pickVariations('blue desktop 120cm', rows)
+    expect(pick.fits.map((i) => rows[i]?.optionValues.join(' / '))).toEqual(['120cm / Dark Teal'])
+  })
+
+  it('prefers a value\'s own name to a family it is filed under (pastel blue, not pastel turquoise)', () => {
+    const rows = ['Pastel Blue & Satin White', 'Pastel Turquoise & Satin White', 'White'].map((finish) => ({
+      optionNames: ['Finish'], optionValues: [finish], aliases: [finish === 'White' ? [] : ['Blue']], name: '',
+    }))
+    expect(pickVariations('pastel blue', rows).fits).toEqual([0])
+    expect(pickVariations('blue', rows).fits).toEqual([0, 1])
+  })
+
+  it('binds a colour backwards only when nothing follows it ("black frame black top")', () => {
+    expect(picked('120cm no mod panel black frame black top').values).toEqual(['120cm / Without Modesty Panel / Black / Black'])
+    expect(picked('120 without modesty panel frame black').fits).toHaveLength(2)
+  })
 })

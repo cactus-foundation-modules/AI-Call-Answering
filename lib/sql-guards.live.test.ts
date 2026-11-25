@@ -182,10 +182,10 @@ suite('ai-call-answering SQL, against a real Postgres', () => {
 
   it('keeps the products a call was about, and reads them back with the call', async () => {
     expect((await mod.calls.getCall(callId))?.discussedProducts).toEqual([])
-    const list = [{ id: 'chair', parentId: null }, { id: 'desk-black', parentId: 'desk' }]
+    const list = [{ id: 'chair', url: null, parentId: null }, { id: 'desk-black', url: null, parentId: 'desk' }]
     await mod.calls.saveDiscussedProducts(callId, list)
     expect((await mod.calls.findCall({ callSid: 'CA1' }))?.discussedProducts).toEqual(list)
-    await mod.calls.saveDiscussedProducts(callId, Array.from({ length: 14 }, (_, i) => ({ id: `p${i}`, parentId: null })))
+    await mod.calls.saveDiscussedProducts(callId, Array.from({ length: 14 }, (_, i) => ({ id: `p${i}`, url: null, parentId: null })))
     const kept = (await mod.calls.getCall(callId))?.discussedProducts ?? []
     expect(kept).toHaveLength(10)
     expect(kept[9]?.id).toBe('p13')

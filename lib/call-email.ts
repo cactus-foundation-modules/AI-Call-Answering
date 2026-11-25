@@ -3,10 +3,10 @@ import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { sendTemplateEmail } from '@/lib/email'
 import { renderProductTable } from '@/modules/unified-inbox/lib/products/render'
 import { resolveProducts } from '@/modules/unified-inbox/lib/products'
-import { recentEmailsFrom, recordEmailSent, type CallRecord } from './calls'
-import { productsToSend } from './discussed-products'
+import { recentEmailsFrom, recordEmailSent, saveDiscussedProducts, type CallRecord } from './calls'
+import { chosenPicks, markEmailed, productsToSend } from './discussed-products'
 import { titleCaseName } from './name-case'
-import { toProductRefs } from './product-queries'
+import { toProductRefs, variationIdsOf } from './product-queries'
 import { basketUrl, getCallBasket, type CallBasket } from './phone-basket'
 import { getSettings } from './settings'
 import { isPlausibleEmail } from './text'
@@ -43,7 +43,9 @@ import { pickLinks, unknownLinksMessage, type SiteLink } from './site-links'
 
 export const MAX_EMAILS_PER_CALL = 3
 export const MAX_EMAILS_PER_NUMBER_PER_HOUR = 6
-export const MAX_PRODUCTS_PER_EMAIL = 5
+/** As many as a call remembers: "email me everything" must not lose the
+ *  start of the call to a cap (learned on a live chat, at 5). */
+export const MAX_PRODUCTS_PER_EMAIL = 10
 export const MAX_LINKS_PER_EMAIL = 5
 
 const SUMMARY_MAX = 3000
@@ -70,6 +72,12 @@ export function signatureHtml(signature: string): string {
     return html ? `<div style="margin:24px 0 0;">${html}</div>` : ''
   }
   return `<p style="margin:24px 0 0;">${escapeHtml(body).replace(/\n/g, '<br>')}</p>`
+}
+
+/** The note's words as the email prints them: "plus VAT" written the way the
+ *  product list under it writes it, "+ VAT" (learned on a live chat). Pure. */
+export function emailWording(text: string): string {
+  return text.replace(/\bplus\s+VAT\b/gi, '+ VAT')
 }
 
 /** One line, no markup-looking noise, short enough for a subject. */
@@ -185,7 +193,7 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
         : 'I need an email address. Ask for it, read it back one character at a time, and retry once they confirm.',
     }
   }
-  const summary = input.summary.trim().slice(0, SUMMARY_MAX)
+  const summary = emailWording(input.summary.trim().slice(0, SUMMARY_MAX))
   if (!summary) return { ok: false, message: 'There was nothing to put in the email. Write a short note of what was discussed and retry.' }
 
   const settings = await getSettings()
@@ -196,9 +204,28 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
     return { ok: false, message: `Nothing was sent. ${unknownLinksMessage(picked.unknown)} If you cannot find it, tell the caller where it is on the website instead.` }
   }
   const basket = await getCallBasket(call.id)
+  // A listing the caller chose only some options of goes with just those
+  // picked (lib/partial-choice.ts), so the email's link opens with their
+  // choices and nothing more.
+  const picks = chosenPicks(call.discussedProducts)
+  let sentIds: string[] = []
   const listFor = async (given: readonly string[]) => {
-    const bare = await toProductRefs(productsForSummary(productsToSend(given, call.discussedProducts, MAX_PRODUCTS_PER_EMAIL * 2), basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
-    return resolveProducts(withDeliveries(bare, input.deliveries, basket, await timingMenus(bare.map((ref) => ref.id))))
+    const refs = await toProductRefs(productsForSummary(productsToSend(given, call.discussedProducts, MAX_PRODUCTS_PER_EMAIL * 2), basket).slice(0, MAX_PRODUCTS_PER_EMAIL))
+    const bare = refs.map((ref) => {
+      const picked = ref.kind === 'product' ? picks.get(ref.id) : undefined
+      return picked ? { ...ref, picks: picked } : ref
+    })
+    sentIds = bare.map((ref) => ref.id)
+    const menus = await timingMenus(bare.map((ref) => ref.id))
+    // A listing with only some options chosen has no delivery menu of its own:
+    // its variations each carry one, so their services stand in for it.
+    for (const ref of bare) {
+      if (ref.kind !== 'product' || !ref.picks || menus.has(ref.id)) continue
+      const childMenus = await timingMenus(await variationIdsOf(ref.id))
+      const offered = [...new Map([...childMenus.values()].flat().map((option) => [option.key, option])).values()]
+      if (offered.length > 0) menus.set(ref.id, offered)
+    }
+    return resolveProducts(withDeliveries(bare, input.deliveries, basket, menus))
   }
   let resolved = await listFor(input.productIds)
   if (resolved.length === 0 && input.productIds.length > 0 && call.discussedProducts.length > 0) {
@@ -219,6 +246,11 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
   })
   if (!sent) return { ok: false, message: 'The email could not be sent just now. Offer a callback instead.' }
   await recordEmailSent(call.id, recipient.email)
+  if (resolved.length > 0) {
+    await saveDiscussedProducts(call.id, markEmailed(call.discussedProducts, sentIds)).catch((error: unknown) => {
+      console.error('[ai-call-answering] could not remember what was emailed', error)
+    })
+  }
   const leftOut = unknownLinksMessage(picked.unknown)
   return leftOut ? { ok: true, message: leftOut } : { ok: true }
 }

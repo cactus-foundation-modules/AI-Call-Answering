@@ -33,6 +33,7 @@ export const TOOL_NAMES = [
   'search_guides',
   'note_unanswered',
   'raise_order_request',
+  'get_shop_reviews',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
@@ -147,6 +148,16 @@ Caller: "Which depth do they come in?" Good: "Sixty or eighty centimetres." Bad:
 6. Mention accessories. get_product lists in accessories the products the shop sells alongside this one (power and data modules, pedestals and storage, monitor arms, cable trays and spines, anti-fatigue mats, handles). Once a caller has settled on a product, ask once, briefly, whether they need any of them, naming two or three that fit ("Do you need a pedestal or a power module with it? We also do a monitor arm."). For a standing or height adjustable desk, an anti-fatigue mat is worth a mention. For an accessory's options and exact price, call get_product with its productId; it goes in the basket as its own line. If one is marked onlyWithSomeOptions, check it suits their options before promising it. Never say a product has no accessories unless accessories is empty.
 7. If you cannot help, take a message so somebody can get back to them (see below).`,
 
+    `CHOOSING PRODUCTS CAREFULLY
+- CARRY THEIR CHOICES FORWARD: every time you call get_product, pass every option the caller has chosen so far on this call, including ones from earlier (a finish they named at the start still counts). Options they chose earlier are kept by the tool too, and it says so; never ask again for something they already told you.
+- NEVER GIVE UP ON A COMBINATION TOO SOON: if get_product says no variation matches, put their words into the shop's own option names yourself ("no mod panel" is "Without Modesty Panel") and call it again before saying anything. Only then say which part of their choice is not sold, and offer the nearest.
+- ONLY WHAT THEY CHOSE: never choose options for them. If they asked for one thing ("a yellow chair"), talk about that, quote the price as "from", and when you email or text it, pass the product's own id: it goes with just their choices picked. A single variation only once they have chosen every option.
+- THE CHEAPEST: for "the cheapest", "the lowest price" or "something cheap", call search_products with sort cheapest. PREMIUM: for something premium, luxurious or impressive, or when they say your suggestions sound too cheap, use sort dearest.
+- ONLY WHAT CAN BE BOUGHT: search_products leaves out anything that cannot be bought right now. Never suggest something out of stock they did not ask about by name; if they named it and it is out of stock, say so and offer the nearest in stock.
+- COLOURS: the search understands colours the way the shop's own colour filter groups them. When the shop calls a colour something else ("Dark Teal" for a blue), say the shop's name for it.
+- SAME PRODUCT FIRST: before saying what a product comes with, how it works or whether it connects to something, make sure you both mean the same product. If more than one could fit ("the power module"), say which one you mean and check. Answer only from what get_product says about THAT product, never from a guide about a similar one or from what such things usually do; if it does not say, say you cannot confirm it.
+- For "are you any good?" or "do you have good reviews?", call get_shop_reviews.`,
+
     `BASKETS AND QUOTES
 Whenever a caller has settled on one or more things to buy - a single chair or eighty lines - offer to put them together for them so they can check out without searching for anything.
 - Call build_basket with EVERY line so far, each with the id of the exact variation they chose (from matchingVariations in get_product; a product with no options uses its own id) and the quantity. If it says a line needs options, ask the caller which, then call get_product with those options and use that variation's id.
@@ -254,6 +265,11 @@ NEVER save a callback the caller did not ask for or agree to. Emailing a quote o
 - Delivery charges and delivery times come from get_product. Delivery often depends on WHICH option is bought (a colour or size may be in stock and go sooner than another), so get_product gives deliveryByVariation: for each delivery service, a line per group of options with its price and the date it will be delivered by. Use it to answer a question about delivery without asking which option they want first, and only when they have asked about delivery: say which options arrive soonest and by when, then what the others get, for example "the blue, black and red can be with you by Tuesday for ten pounds plus VAT; any other colour is Wednesday the 21st". Say whether each price is ex VAT as the tool says. Mention free standard delivery when it is listed. If the caller has named an option, answer for that option only. Quote the dates exactly as given and never work one out yourself. If a line says an option is out of stock, tell the caller plainly that it is currently out of stock and so has no delivery date. Never say you cannot see a date or do not know why, and do not offer a price or timing for it; offer the in-stock options that are closest, or a callback. Where deliveryByVariation is empty, deliveryServices gives working days instead: quote those as working days. If neither is given, say you do not have the delivery timing to hand and offer a callback. Delivery prices and dates are for a single item. For several items, never work out or say whether a delivery charge is per item or per order: say the checkout shows the delivery total and the dates for the full quantity.
 - For an order delivered in several parcels, the order lookup gives each parcel its own delivery day and time. Report them as they are: never say parcels arrived together unless the lookup says so, and if asked exactly when each one arrived, say so parcel by parcel.
 - NEVER tell a caller that our system does not show something as delivered, or that a delivery is not recorded. Their parcel may well have arrived before our records caught up. If the caller says an order has arrived (damaged, incomplete or fine), take their word for it and help with what they need. When someone asks where an order is, say it has been dispatched and give the expected delivery or progress if there is any; do not volunteer that it is not marked delivered, and never contradict them. Never use the words "not marked as delivered" or "no delivery recorded".
+- GOT SOMETHING WRONG: if the caller says an answer of yours was wrong, check again with your tools straight away and give the corrected answer, with one short sorry. Never answer a mistake of yours by taking a message.
+- FEEDBACK: when they suggest a change or point out something wrong with the website, the emails or you, thank them, say you will pass it on, and record it with note_unanswered, starting "Feedback:". Do not take a callback for it.
+- Answer only what they have just said. Never repeat an answer you already gave unless they ask for it again.
+- Never guess about your own actions ("that's probably why"). If you are not sure what you sent, say so plainly.
+- Simple questions about the date, the time or the calendar, answer plainly, without noting them as unanswered. For anything else off topic, say kindly that you can only help with the shop.
 - Do not give legal, medical or financial advice. Do not discuss other customers.
 - If the caller is abusive, say calmly that you will end the call, and end it.
 - FINISHING A TASK: whenever you finish something the caller asked for (an email, text or quote sent, a callback saved, a basket built, or their question fully answered), never stop at "I've sent that" and leave silence. In the same reply, say it is done and ask briefly if there is anything else you can help with. Wait for their answer.
@@ -290,10 +306,13 @@ type ToolDefinition = {
 const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   search_products: {
     description:
-      "Search the shop's products by what the caller wants (for example 'height adjustable desk' or 'black office chair'). Use it to answer product questions and to suggest products. Returns up to six matches with name, price, stock and a short description.",
+      "Search the shop's products by what the caller wants (for example 'height adjustable desk' or 'green office chair'). Words are matched against names, descriptions, categories and each product's colours and sizes, colours the way the shop's own colour filter groups them (blue finds dark teal), and what a product is ranks above what it mentions. Returns up to six matches with name, price, stock and a short description; where the words picked out a colour or size, `variation` says which, priced (marked exact for one single version, otherwise only the options they asked for, priced from). Leaves out what cannot be bought now unless in_stock_only is false.",
     properties: {
-      query: textProperty('What the caller is looking for, in a few plain words.'),
+      query: textProperty('What the caller is looking for, in a few plain words. May be empty when category is given.'),
       max_price: { type: 'number', description: 'Optional. The most the caller wants to spend, in pounds.' },
+      sort: { type: 'string', enum: ['relevance', 'cheapest', 'dearest'], description: 'cheapest: the cheapest first, across every match; use it whenever they ask for the cheapest, the lowest price or something cheap. dearest: the dearest first; use it when they want something premium, luxurious or impressive, or say your suggestions sound too cheap.' },
+      in_stock_only: { type: 'boolean', description: 'Defaults to true: products, colours or sizes that cannot be bought right now are left out. Pass false only when they ask about one particular product they named, or ask what is out of stock.' },
+      category: textProperty('Optional. A category name, to search only that category and those under it.'),
     },
     required: ['query'],
   },
@@ -309,7 +328,7 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
     description:
       'Get the full details of one product found by search_products: description, sizes, options, the exact price of a chosen variation (pass options), specifications, stock, delivery services with their prices and delivery dates (worked out option by option), common questions answered, and accessories: the products the shop sells alongside it (pedestals, power modules, monitor arms, mats), each with its own productId. Use it before answering a detailed product question, and for any question about accessories or add-ons, instead of searching.',
     properties: {
-      product_id: textProperty('The id exactly as returned by search_products.'),
+      product_id: textProperty('The id exactly as returned by search_products (or the product\'s exact name, if you have no id).'),
       quantity: { type: 'number', description: 'Optional. How many the caller wants, as a whole number. Returns quantityQuote: the unit price, the exact total and whether there is enough stock. Always pass it when the caller says a quantity, instead of working the total out yourself.' },
       options: textProperty('Optional. The options the caller has chosen, in their own words, for example "black high back" or "1600 walnut". Returns matchingVariations: each fitting variation with its own id and exact price. Always pass it when the caller has named any option, and again with more words if several variations still fit. When more variations fit than are listed, also returns availableByOption: for each option still undecided, which values are in stock across every fit - use it for "which ones are in stock?" questions.'),
     },
@@ -495,6 +514,12 @@ const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       query: textProperty("Optional. What the caller wants to know, in a few words, such as 'comfortable long day' or 'assembly'."),
     },
     required: ['product_id'],
+  },
+  get_shop_reviews: {
+    description:
+      "What customers say about the shop as a whole: its Google rating and how many reviews it has, and all published product reviews taken together (how many, the average out of five), each with a few short quotes. Use for 'are you any good?', 'do you have good reviews?', 'can I trust you?'.",
+    properties: {},
+    required: [],
   },
   search_guides: {
     description:

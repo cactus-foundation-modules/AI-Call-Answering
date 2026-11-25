@@ -20,7 +20,8 @@ import {
 import { basketServiceMenus, matchService, serviceMissMessage } from './delivery-choice'
 import { quotesAvailable } from './quote-saver'
 import { getSettings } from './settings'
-import { composeText, textCaller } from './sms'
+import { composeText, textCaller, textSignOff, type TextLinkLine } from './sms'
+import { productLinksToSend } from './discussed-products'
 import { sendableLinks } from './site-content'
 import { pickLinks, unknownLinksMessage } from './site-links'
 
@@ -127,7 +128,7 @@ export async function sendText(
   input: { what: TextKind; note: string | null; productIds: string[]; linkIds: string[]; orderNumber: string | null },
 ): Promise<Result> {
   const settings = await getSettings()
-  const signOff = settings.businessName.trim()
+  const signOff = textSignOff(settings.businessName, getSiteUrl())
   let body: string
   let leftOut = ''
   if (input.what === 'basket') {
@@ -140,7 +141,7 @@ export async function sendText(
     const fallback = basket.quote
       ? `Here is quote ${basket.quote.number}, from our call. Open it to see prices and delivery and check out.`
       : 'Here is the basket we put together on the phone. Open it to see prices and delivery and check out.'
-    body = composeText(input.note || fallback, [basketLinkFor(basket)], signOff)
+    body = composeText(input.note || fallback, [{ label: null, url: basketLinkFor(basket) }], signOff)
   } else if (input.what === 'order_link') {
     if (call.verifiedOrders.length === 0) {
       return { ok: false, message: 'No order has been checked on this call yet. Check the order first.' }
@@ -149,7 +150,7 @@ export async function sendText(
     if (!orderNumber) return { ok: false, message: 'Which order do they mean? Ask, then try again with order_number.' }
     const url = orderTrackingUrl(orderNumber, await getShopConfigCached())
     if (!url) return { ok: false, message: 'Order links are not switched on for this shop. Offer a callback instead.' }
-    body = composeText(`Here is the page for your order ${orderNumber}, where you can track it and report a problem.`, [url], signOff)
+    body = composeText(`Here is the page for your order ${orderNumber}, where you can track it and report a problem.`, [{ label: null, url }], signOff)
   } else {
     const note = (input.note ?? '').trim()
     if (!note) return { ok: false, message: 'Write a short note of what was discussed and retry.' }
@@ -161,7 +162,17 @@ export async function sendText(
       return { ok: false, message: `Nothing was sent. ${unknownLinksMessage(picked.unknown)} If you cannot find it, tell the caller where it is on the website instead.` }
     }
     leftOut = unknownLinksMessage(picked.unknown)
-    const links = [...picked.links.map((link) => link.url), ...(await productLinks(input.productIds))].slice(0, MAX_TEXT_LINKS)
+    // Products from the call's own record (named, with the options chosen,
+    // or only some of them); an id it never recorded is linked as a page.
+    const recorded = productLinksToSend(input.productIds, call.discussedProducts, MAX_TEXT_LINKS)
+    const productLines: TextLinkLine[] = recorded.length > 0
+      ? recorded
+      : (await productLinks(input.productIds)).map((url) => ({ label: null, url }))
+    const links: TextLinkLine[] = []
+    for (const link of [...picked.links.map((page) => ({ label: page.label, url: page.url })), ...productLines]) {
+      if (!links.some((kept) => kept.url === link.url)) links.push(link)
+    }
+    links.splice(MAX_TEXT_LINKS)
     body = composeText(note, links, signOff)
   }
   const sent = await textCaller(call, body)

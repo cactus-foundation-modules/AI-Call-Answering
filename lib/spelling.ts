@@ -144,6 +144,9 @@ export function expandSearchWords(tokens: string[], vocabulary: Vocabulary | nul
         variants.push(`${token}${next}`)
         expanded[index + 1]?.push(`${token}${next}`)
       }
+      // "wooden" for "wood", "golden" for "gold": only when the shop itself
+      // uses the shorter word, so "garden" never turns into "gard".
+      if (token.length >= 6 && token.endsWith('en') && vocabulary.has(token.slice(0, -2))) variants.push(token.slice(0, -2))
       if (!vocabulary.has(token) && token.length >= 6) {
         for (let cut = 3; cut <= token.length - 3; cut++) {
           const head = token.slice(0, cut)

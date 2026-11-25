@@ -1,8 +1,12 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { describePriceRange, effectivePrice, formatPrice } from './product-format'
+import { productPage, type PageBase } from './product-links'
 import { plainText, truncate } from './text'
 
+// Copied from the phone assistant (modules/ai-call-answering/lib/product-accessories.ts) and
+// kept in step by hand: the two modules never import each other. Adapted for
+// a phone call: the url is there for a text or email, never to read out.
 // ---------------------------------------------------------------------------
 // The accessories a product is sold with, for the assistant to mention.
 //
@@ -25,9 +29,11 @@ export const MAX_ACCESSORIES = 12
 
 export type Accessory = {
   /** The accessory's own product id: pass it to get_product for its options and
-   *  exact price, and to build_basket as its own line once a variation is chosen. */
+   *  exact price, and and its url, for a text or email (never read out). */
   productId: string
   name: string
+  /** Its own page, for a text or email. */
+  url: string | null
   /** "from £20 to £45" for one sold in variations, else its price. */
   price: string
   summary: string
@@ -45,6 +51,7 @@ export type AccessoryList = {
 type Row = {
   addon_id: string
   name: string
+  slug: string | null
   short_description: string | null
   price: unknown
   sale_price: unknown
@@ -89,7 +96,7 @@ export function accessoryPrice(row: Pick<Row, 'price' | 'sale_price' | 'low' | '
  * listing first, because links are made on the listing. Empty where the shop has
  * no accessories module or the product has none.
  */
-export async function loadAccessories(productId: string, symbol: string): Promise<AccessoryList | null> {
+export async function loadAccessories(productId: string, symbol: string, base: PageBase = null): Promise<AccessoryList | null> {
   if (!(await exists('pad_links'))) return null
   const variations = await exists('svr_variants')
   const listing = variations
@@ -108,7 +115,7 @@ export async function loadAccessories(productId: string, symbol: string): Promis
     ? Prisma.sql`(SELECT "noun_plural" FROM "pad_settings" WHERE "id" = 'singleton')`
     : Prisma.sql`NULL::text`
   const rows = await prisma.$queryRaw<Row[]>(Prisma.sql`
-    SELECT a."id" AS addon_id, a."name", a."short_description", a."price", a."sale_price", l."config",
+    SELECT a."id" AS addon_id, a."name", a."slug", a."short_description", a."price", a."sale_price", l."config",
            ${spread}, ${noun} AS noun
     FROM "pad_links" l
     JOIN "shp_products" a ON a."id" = l."addon_product_id"
@@ -123,6 +130,7 @@ export async function loadAccessories(productId: string, symbol: string): Promis
     items: rows.map((row) => ({
       productId: row.addon_id,
       name: row.name,
+      url: productPage(base, row.slug),
       price: accessoryPrice(row, symbol),
       summary: truncate(plainText(row.short_description), 140),
       onlyWithSomeOptions: hasShowWhenRules(row.config),

@@ -12,7 +12,8 @@ import {
   callerLabel,
   type CallRecord,
 } from './calls'
-import { fromProductDetail, fromSkuHits, rememberProducts, type DiscussedProduct } from './discussed-products'
+import { fromProductDetail, fromSkuHits, recordedEntry, rememberProducts, type DiscussedProduct } from './discussed-products'
+import { choicesInAddress } from './partial-choice'
 import { lookupOrders, lookupOrdersByCallerNumber } from './order-queries'
 import { emailOrderLink } from './order-link'
 import { callerOrdersMissMessage, callerOrdersNote } from './caller-orders'
@@ -25,7 +26,7 @@ import { isPlausibleEmail } from './text'
 import { callerHistory } from './caller-history'
 import { MAX_BASKET_LINES } from './phone-basket'
 import { deliveryToPostcode } from './postcode-delivery'
-import { productReviews, searchGuides, searchPages, type Passage } from './site-content'
+import { productReviews, searchGuides, searchPages, shopReviews, type Passage } from './site-content'
 import { buildBasket, sendText } from './text-tools'
 import { saveBasketQuote } from './quote-tool'
 import { recordUnanswered } from './unanswered'
@@ -63,12 +64,15 @@ const SendsToCaller = CallIdentity.extend({
 const LinkIds = z.array(z.string().trim().min(1).max(600)).max(10).optional()
 
 const SearchInput = CallIdentity.extend({
-  query: z.string().trim().min(1).max(200),
+  query: z.string().trim().max(200),
   max_price: z.number().positive().max(1_000_000).optional(),
+  sort: z.enum(['relevance', 'cheapest', 'dearest']).optional(),
+  in_stock_only: z.boolean().optional(),
+  category: z.string().trim().max(200).optional(),
 })
 const ProductInput = CallIdentity.extend({
-  product_id: z.string().trim().min(1).max(100),
-  options: z.string().trim().max(200).optional(),
+  product_id: z.string().trim().min(1).max(300),
+  options: z.string().trim().max(300).optional(),
   quantity: z.number().int().positive().max(100_000).optional(),
 })
 const SkuInput = CallIdentity.extend({
@@ -376,25 +380,39 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
     case 'search_products': {
       const input = SearchInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
-      const { products, note } = await searchProducts(input.data.query, input.data.max_price ?? null)
+      const { products, note } = await searchProducts(input.data.query, {
+        maxPrice: input.data.max_price ?? null,
+        inStockOnly: input.data.in_stock_only ?? true,
+        sort: input.data.sort === 'cheapest' ? 'price' : input.data.sort === 'dearest' ? 'price_desc' : 'relevance',
+        category: blankToNull(input.data.category),
+      })
       return { result: { ok: true, products, note }, callbackSaved: null }
     }
     case 'find_by_sku': {
       const input = SkuInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       const { hits, note } = await findBySku(input.data.sku)
-      await rememberDiscussed(input.data, fromSkuHits(hits))
+      await rememberDiscussed(input.data, fromSkuHits(hits.map((hit) => ({ ...hit, url: hit.url ?? null }))))
       return { result: { ok: true, products: hits, note }, callbackSaved: null }
     }
     case 'get_product': {
       const input = ProductInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
-      const detail = await getProductDetail(input.data.product_id, blankToNull(input.data.options), input.data.quantity ?? null)
+      // Options chosen earlier on the call still hold where the new words
+      // leave them open (lib/partial-choice.ts carryChoices).
+      const call = await findCall({ callSid: input.data.call_sid, conversationId: input.data.conversation_id }).catch(() => null)
+      const recorded = call?.discussedProducts ?? []
+      const detail = await getProductDetail(
+        input.data.product_id,
+        blankToNull(input.data.options),
+        input.data.quantity ?? null,
+        (productId) => choicesInAddress(recordedEntry(recorded, productId)?.url),
+      )
       if (detail) await rememberDiscussed(input.data, fromProductDetail(detail))
       return {
         result: detail
           ? { ok: true, product: detail }
-          : { ok: false, message: 'That product could not be found. Search again.' },
+          : { ok: false, message: 'That product could not be found. Search for it with search_products and use the id it returns.' },
         callbackSaved: null,
       }
     }
@@ -505,6 +523,21 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
       const input = PostcodeInput.safeParse(body)
       if (!input.success) return { result: BAD_INPUT, callbackSaved: null }
       return { result: await deliveryToPostcode(input.data.postcode, blankToNull(input.data.product_id)), callbackSaved: null }
+    }
+    case 'get_shop_reviews': {
+      if (!NoInput.safeParse(body).success) return { result: BAD_INPUT, callbackSaved: null }
+      const digest = await shopReviews()
+      if (!digest || (!digest.google && !digest.products)) {
+        return { result: { ok: false, message: 'This shop has no reviews to show yet. Say so plainly; never invent an opinion.' }, callbackSaved: null }
+      }
+      return {
+        result: {
+          ok: true,
+          ...digest,
+          note: 'Say the headline figures (the Google rating and how many reviews, and the product reviews\' average and how many), then paraphrase one short quote if it helps. Never read a web address out, never invent or exaggerate.',
+        },
+        callbackSaved: null,
+      }
     }
     case 'get_reviews': {
       const input = ReviewsInput.safeParse(body)

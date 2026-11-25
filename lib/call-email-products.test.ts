@@ -14,8 +14,8 @@ const mail = vi.hoisted(() => ({ sendTemplateEmail: vi.fn(async () => true) }))
 vi.mock('@/lib/email', () => mail)
 vi.mock('@/modules/unified-inbox/lib/products', () => ({ resolveProducts: products.resolveProducts }))
 vi.mock('@/modules/unified-inbox/lib/products/render', () => ({ renderProductTable: (choices: Ref[]) => choices.map((c) => `[${c.id}]`).join('') }))
-vi.mock('./calls', () => ({ recentEmailsFrom: vi.fn(async () => 0), recordEmailSent: vi.fn(async () => undefined) }))
-vi.mock('./product-queries', () => ({ toProductRefs: async (ids: string[]) => ids.map((id) => ({ moduleName: 'shop', kind: 'product', id })) }))
+vi.mock('./calls', () => ({ recentEmailsFrom: vi.fn(async () => 0), recordEmailSent: vi.fn(async () => undefined), saveDiscussedProducts: vi.fn(async () => undefined) }))
+vi.mock('./product-queries', () => ({ toProductRefs: async (ids: string[]) => ids.map((id) => ({ moduleName: 'shop', kind: 'product', id })), variationIdsOf: async () => [] }))
 vi.mock('./phone-basket', () => ({ basketUrl: (token: string) => `https://shop.test/basket/${token}`, getCallBasket: vi.fn(async () => null) }))
 vi.mock('./settings', () => ({ getSettings: async () => ({ extraInstructions: '', emailSignature: '' }) }))
 vi.mock('./order-queries', () => ({ emailsOnOrders: vi.fn(async () => []), nameOnOrderEmail: vi.fn(async () => '') }))
@@ -37,8 +37,8 @@ function call(over: Partial<CallRecord> = {}): CallRecord {
 
 const input = { email: 'jo@example.com', name: null, subject: 'Desks', summary: 'About desks.', productIds: [] as string[], linkIds: [], deliveries: [] }
 const vars = () => (mail.sendTemplateEmail.mock.calls[0] as unknown as [string, string, Record<string, string>])[2]
-const deskBlack = { id: 'desk-black', parentId: 'desk' }
-const chair = { id: 'chair', parentId: null }
+const deskBlack = { id: 'desk-black', url: null, parentId: 'desk' }
+const chair = { id: 'chair', url: null, parentId: null }
 
 beforeEach(() => {
   vi.clearAllMocks()

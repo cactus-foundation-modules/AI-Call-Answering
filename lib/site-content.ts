@@ -329,3 +329,72 @@ export async function productReviews(productId: string, query: string | null): P
     })),
   }
 }
+
+/** What the shop's customers say about the shop as a whole: its Google rating
+ *  (the Google Reviews module's, where installed) and every published product
+ *  review taken together (the Reviews module's, where installed), each with a
+ *  few short quotes. Null when the site has neither. */
+export type ShopReviewDigest = {
+  google: { rating: number | null; count: number | null; placeName: string | null; mapsUrl: string | null; quotes: Array<{ rating: number; text: string }> } | null
+  products: { count: number; averageRating: number | null; quotes: Array<{ rating: number; title: string; text: string }> } | null
+}
+
+/**
+ * Learned on a live chat: asked "does Deskwell have good reviews?", the
+ * assistant could only look up one product's reviews and said it could not
+ * see the shop's. Only reviews the shop itself shows are read: a Google review
+ * the owner hid, or one below the module's own minimum rating, never appears.
+ */
+export async function shopReviews(): Promise<ShopReviewDigest | null> {
+  const [googleTables, productTable] = await Promise.all([
+    Promise.all([tableExists('grv_settings'), tableExists('grv_reviews')]).then(([a, b]) => a && b),
+    tableExists('rvw_reviews'),
+  ])
+  if (!googleTables && !productTable) return null
+
+  let google: ShopReviewDigest['google'] = null
+  if (googleTables) {
+    const settings = await prisma.$queryRaw<Array<{ place_rating: unknown; place_rating_count: unknown; place_name: string | null; place_maps_url: string | null; min_rating: unknown }>>`
+      SELECT "place_rating", "place_rating_count", "place_name", "place_maps_url", "min_rating" FROM "grv_settings" LIMIT 1
+    `
+    const row = settings[0]
+    const minRating = Number(row?.min_rating ?? 0) || 0
+    const quotes = await prisma.$queryRaw<Array<{ rating: number; text: string | null }>>`
+      SELECT "rating", "text" FROM "grv_reviews"
+      WHERE "hidden" = false AND "rating" >= ${minRating} AND COALESCE(trim("text"), '') <> ''
+      ORDER BY "published_at" DESC NULLS LAST LIMIT 3
+    `
+    const rating = row?.place_rating === null || row?.place_rating === undefined ? null : Number(row.place_rating)
+    const count = row?.place_rating_count === null || row?.place_rating_count === undefined ? null : Number(row.place_rating_count)
+    if (row && (rating !== null || quotes.length > 0)) {
+      google = {
+        rating: Number.isFinite(rating) ? rating : null,
+        count: Number.isFinite(count) ? count : null,
+        placeName: row.place_name?.trim() || null,
+        mapsUrl: row.place_maps_url?.trim() || null,
+        quotes: quotes.map((quote) => ({ rating: quote.rating, text: (quote.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 300) })),
+      }
+    }
+  }
+
+  let products: ShopReviewDigest['products'] = null
+  if (productTable) {
+    const totals = await prisma.$queryRaw<Array<{ count: number; average: unknown }>>`
+      SELECT COUNT(*)::int AS count, AVG("rating") AS average FROM "rvw_reviews" WHERE "status" = 'PUBLISHED'
+    `
+    const count = totals[0]?.count ?? 0
+    if (count > 0) {
+      const quotes = await prisma.$queryRaw<Array<{ rating: number; title: string | null; body: string | null }>>`
+        SELECT "rating", "title", "body" FROM "rvw_reviews"
+        WHERE "status" = 'PUBLISHED' AND COALESCE(trim("body"), '') <> ''
+        ORDER BY "rating" DESC, COALESCE("published_at", "created_at") DESC LIMIT 3
+      `
+      products = {
+        count,
+        averageRating: Math.round(Number(totals[0]?.average ?? 0) * 10) / 10,
+        quotes: quotes.map((quote) => ({ rating: quote.rating, title: (quote.title ?? '').slice(0, 120), text: (quote.body ?? '').replace(/\s+/g, ' ').trim().slice(0, 300) })),
+      }
+    }
+  }
+  return { google, products }
+}

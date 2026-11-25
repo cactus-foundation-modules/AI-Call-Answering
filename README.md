@@ -30,6 +30,10 @@ A voice assistant that answers your phone. Built on the [Twilio module](https://
 
 If the assistant is off, not set up, or ElevenLabs is slow or down, the call carries on to your normal forwarding and voicemail. Callers are never worse off for it being installed.
 
+### Shared with the chat assistant
+
+The shop search and product look-up are copies of the chat assistant's (`modules/ai-agent-for-live-chat/lib/shop/`), kept in step by hand: `lib/product-queries.ts` (cached search index with colour families from the Filters module's rules, `search-rank.ts` type ranking, `search-variations.ts`, cheapest/dearest and in-stock, look-up by id, slug or name, 3,500 characters of description), `lib/variation-match.ts`, `lib/partial-choice.ts` (only the options chosen, carried forward from earlier in the call), `lib/discussed-products.ts` (names, addresses, partial `picks`, `emailed`), `lib/product-links.ts`. New tool `get_shop_reviews`. A change to either assistant's shop code should be made in both.
+
 ## Requirements
 
 - The **Twilio**, **Shop** and **Unified Inbox** modules.
