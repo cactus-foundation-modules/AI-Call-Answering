@@ -11,7 +11,8 @@ import {
   type QuantityQuote,
   type StockFacts,
 } from './product-format'
-import { summariseStockByOption, variationHaystack, variationWords, type OptionAvailability } from './variation-stock'
+import { summariseStockByOption, type OptionAvailability } from './variation-stock'
+import { pickVariations } from './variation-match'
 import { resolveProductDeliveryOptions } from '@/modules/shop/lib/detail-delivery'
 import { getProductFaqCategoryChain } from '@/modules/shop/lib/db/catalogue'
 import { normaliseFaqSet } from '@/modules/shop/lib/faq'
@@ -19,7 +20,7 @@ import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { describeForecast, loadDeliveryForecast, type SpokenDeliveryService } from './delivery-forecast'
 import { escapeLike, plainText, searchTokens, truncate } from './text'
-import { expandSearchWords, textHasWord, type Vocabulary } from './spelling'
+import { expandSearchWords, type Vocabulary } from './spelling'
 import { normaliseSpokenSku, skuMatch, skuSearchDigits, type SkuMatch } from './sku'
 import type { ProductRef } from '@/modules/unified-inbox/lib/products'
 import { loadAccessories, type AccessoryList } from './product-accessories'
@@ -355,22 +356,27 @@ export type VariationsFound = {
   matches: VariationMatch[]
   total: number
   availableByOption: OptionAvailability[] | null
+  /** Words no variation carries, set aside rather than ruling everything out. */
+  ignored: string[]
+  /** True when no variation had every word asked for: the matches are the
+   *  nearest, and `unmet` says what they lack. */
+  closest: boolean
+  unmet: string[]
 }
 
-/** The switched-on variations of a listing whose options contain every word the
- *  caller used ("black high back"), each with its own price. Words about an
- *  option rather than a value ("finish", "frame", "cm") are dropped, and a word
- *  may match an option's name as well as its value. Words that are all filler
+/** The switched-on variations of a listing the caller's words pick out ("black
+ *  high back", "120 no modesty panel black frame"), each with its own price.
+ *  The matching rules are lib/variation-match.ts: negations folded, words no
+ *  variation carries set aside, a colour bound to the option it names, and the
+ *  nearest variations when nothing has every word. Words that are all filler
  *  ("which colours are in stock?") fit every variation, so the stock summary
- *  still covers the lot. Empty list for no match; null when the listing has no
- *  variations to read. */
+ *  still covers the lot. Null when the listing has no variations. */
 async function findVariations(
   productId: string,
   wanted: string,
   symbol: string,
   quantity: number | null,
 ): Promise<VariationsFound | null> {
-  const tokens = variationWords(wanted)
   if (!(await tableExists('svr_variants'))) return null
   const rows = await prisma.$queryRaw<VariationRow[]>`
     SELECT child."id", child."name", child."sku", child."price", child."sale_price", child."track_inventory",
@@ -390,7 +396,6 @@ async function findVariations(
     ORDER BY sv."position", child."name"
     LIMIT 1000
   `
-  const words = expandSearchWords(tokens, null)
   const facts = (row: VariationRow): StockFacts => ({
     trackInventory: row.track_inventory,
     stockCount: row.stock_count,
@@ -398,12 +403,9 @@ async function findVariations(
     outOfStockBehaviour: row.out_of_stock_behaviour,
     isPreOrder: row.is_pre_order,
   })
-  const fits = rows
-    .map((row) => ({ row, optionNames: row.option_names ?? [], optionValues: row.option_values ?? [] }))
-    .filter((fit) => {
-      const haystack = variationHaystack({ optionNames: fit.optionNames, optionValues: fit.optionValues, name: fit.row.name })
-      return words.every((variants) => textHasWord(haystack, variants))
-    })
+  const candidates = rows.map((row) => ({ row, optionNames: row.option_names ?? [], optionValues: row.option_values ?? [], name: row.name }))
+  const pick = pickVariations(wanted, candidates)
+  const fits = pick.fits.map((index) => candidates[index]).filter((fit): fit is (typeof candidates)[number] => !!fit)
   const matches = fits.slice(0, MAX_MATCHING_VARIATIONS).map(({ row, optionValues }): VariationMatch => {
     const { now, was } = effectivePrice(numberOrNull(row.price) ?? 0, numberOrNull(row.sale_price))
     const stock = facts(row)
@@ -420,7 +422,7 @@ async function findVariations(
   const availableByOption = fits.length > matches.length
     ? summariseStockByOption(fits.map((fit) => ({ optionNames: fit.optionNames, optionValues: fit.optionValues, facts: facts(fit.row) })))
     : null
-  return { matches, total: fits.length, availableByOption }
+  return { matches, total: fits.length, availableByOption, ignored: pick.ignored, closest: pick.closest, unmet: pick.unmet }
 }
 
 async function loadSpecifications(productId: string): Promise<Array<{ name: string; values: string[] }>> {
@@ -549,16 +551,22 @@ function priceNoteCore(
   if (!wantedOptions || found === null) {
     return `${base} This product is sold in ${spread.count} variations and the price depends on which is chosen, so the price above is a range. If the caller has named any options (colour, size, back height), call get_product again with those words in "options" to get the exact price of that variation. To answer which options are in stock, call get_product again with the options they have named (or "in stock" if none) and answer from availableByOption or each variation's availability. Never quote the range as if it were the price of their choice.`
   }
+  const setAside = found.ignored.length > 0
+    ? ` These words match none of this product's options and were set aside: ${found.ignored.join(', ')}. They may describe the product itself (how a finish looks, say); check the options listed above if one matters.`
+    : ''
   if (found.matches.length === 0) {
-    return `${base} No variation matches those options. Check the option values listed above and try again with words from them, or tell the caller you cannot find that combination.`
+    return `${base}${setAside} No variation matches those options. Read the option values listed above, map the caller's words onto them yourself (for example "no mod panel" is "Without Modesty Panel") and call get_product again with those exact values before telling the caller anything. Only if that also finds nothing, say which option they asked for is not sold.`
+  }
+  if (found.closest) {
+    return `${base}${setAside} No variation has everything asked for; these are the nearest, and they do not have: ${found.unmet.join(', ')}. Tell the caller plainly which part of their choice is not sold and offer the nearest; never say the whole product is unavailable.`
   }
   if (found.total > found.matches.length) {
-    return `${base} ${found.total} variations fit those words and only ${found.matches.length} are listed. If the caller asked what is in stock or available, answer from availableByOption, which covers every one that fits: name about three values from inStock (and say which are out of stock if they asked), then offer the rest; do not ask them to pick first. A value counts as in stock if it is in stock in at least one of the combinations that fit. Only when they want a price or a basket line, ask which option is still undecided, then call get_product again with more words in "options".`
+    return `${base}${setAside} ${found.total} variations fit those words and only ${found.matches.length} are listed. If the caller asked what is in stock or available, answer from availableByOption, which covers every one that fits: name about three values from inStock (and say which are out of stock if they asked), then offer the rest; do not ask them to pick first. A value counts as in stock if it is in stock in at least one of the combinations that fit. Only when they want a price or a basket line, ask which option is still undecided, then call get_product again with more words in "options".`
   }
   if (found.matches.length === 1) {
-    return `${base} Quote the price in matchingVariations: it is the exact price of what the caller asked about. Use its id in email_summary product_ids, not the product id.`
+    return `${base}${setAside} Quote the price in matchingVariations: it is the exact price of what the caller asked about. Use its id in email_summary product_ids, not the product id.`
   }
-  return `${base} Several variations fit. Quote the price of each that matters, or ask which one they want. Use the id of the chosen variation in email_summary product_ids, not the product id.`
+  return `${base}${setAside} Several variations fit. If the caller already chose the option that tells them apart earlier in this call, call get_product again with that added rather than asking. Otherwise quote the price of each that matters, or ask which one they want. Use the id of the chosen variation in email_summary product_ids, not the product id.`
 }
 
 /** What the assistant discussed, as references the unified inbox can print. An id
