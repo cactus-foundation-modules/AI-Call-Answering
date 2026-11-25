@@ -32,6 +32,8 @@ type Rule = {
   notAbout?: RegExp
   /** Skip a sentence that says not to do the thing, e.g. "never say next-day". */
   skipWhenNegated?: boolean
+  /** A sentence matching this is left alone even though `test` matched. */
+  skipWhen?: RegExp
   advice: string
 }
 
@@ -45,6 +47,10 @@ const RULES: Rule[] = [
   },
   {
     test: /\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(co\.uk|org\.uk|com|uk|net|org|io|shop)\/\S*/i,
+    // A link the owner wants sent ("offer to send them the link to the article:
+    // https://...") is how a page off the site becomes sendable at all, so that
+    // sentence is not a clash. A bare address to recite still is.
+    skipWhen: /\b(send|email|e-mail|text|share|offer)\b[^.]{0,80}\b(link|article|page|address)\b/i,
     advice:
       'This asks the assistant to give out a web address with a page path, which nobody can take down from a phone call. The built-in rules look the order up and offer to email the link instead.',
   },
@@ -103,6 +109,7 @@ export function findInstructionConflicts(text: string): InstructionConflict[] {
       if (rule.about && !rule.about.test(sentence)) continue
       if (rule.notAbout && rule.notAbout.test(sentence)) continue
       if (rule.skipWhenNegated && NEGATION.test(sentence)) continue
+      if (rule.skipWhen?.test(sentence)) continue
       // One warning per kind: the first sentence is enough to find the rest.
       if (seenAdvice.has(rule.advice)) continue
       seenAdvice.add(rule.advice)

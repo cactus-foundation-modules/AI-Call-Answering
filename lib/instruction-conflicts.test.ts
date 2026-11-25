@@ -50,4 +50,9 @@ describe('findInstructionConflicts', () => {
   it('warns once per kind', () => {
     expect(findInstructionConflicts('No invoicing. No bank transfer.')).toHaveLength(1)
   })
+
+  it('leaves alone a link the owner wants sent', () => {
+    expect(findInstructionConflicts("If they're interested, offer to send them the link to the article: https://workplaceinsight.net/the-office-furniture-price-on-the-page-has-always-been-an-opening-bid/")).toHaveLength(0)
+    expect(findInstructionConflicts('Tell them our sizing guide is at deskwell.co.uk/guides/sizing.')).toHaveLength(1)
+  })
 })
