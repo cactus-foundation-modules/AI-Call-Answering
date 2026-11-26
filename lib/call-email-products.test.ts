@@ -22,7 +22,7 @@ vi.mock('./order-queries', () => ({ emailsOnOrders: vi.fn(async () => []), nameO
 vi.mock('./delivery-choice', () => ({ matchService: vi.fn(), timingMenus: vi.fn(async () => new Map()) }))
 vi.mock('./site-content', () => ({ sendableLinks: async () => new Map() }))
 
-const { emailCallSummary } = await import('./call-email')
+const { emailCallSummary, linkWithDelivery } = await import('./call-email')
 
 function call(over: Partial<CallRecord> = {}): CallRecord {
   return {
@@ -72,5 +72,14 @@ describe('emailCallSummary lists the products the call was about', () => {
     vi.clearAllMocks()
     await emailCallSummary(call(), { ...input, name: "MARY-JANE O'NEIL" })
     expect(vars().customerName).toBe("Mary-Jane O'Neil")
+  })
+})
+
+describe('linkWithDelivery (the live-site express link)', () => {
+  it('puts the chosen service on the product link, and leaves others alone', () => {
+    const choice = { url: 'https://shop.test/desk?width=140cm', deliveryQuote: { key: 'express-delivery' } } as unknown as Parameters<typeof linkWithDelivery>[0]
+    expect(linkWithDelivery(choice).url).toBe('https://shop.test/desk?width=140cm&delivery-service=express-delivery')
+    const plain = { url: 'https://shop.test/chair', deliveryQuote: null } as unknown as Parameters<typeof linkWithDelivery>[0]
+    expect(linkWithDelivery(plain).url).toBe('https://shop.test/chair')
   })
 })

@@ -22,6 +22,7 @@ import { normaliseFaqSet } from '@/modules/shop/lib/faq'
 import { loadShopWideFaqs, resolveForProduct, toSpokenFaqs } from './faq-queries'
 import { describeDeliveryTiming, type DeliveryTimingWords } from './delivery-words'
 import { describeForecast, loadDeliveryForecast, type SpokenDeliveryService } from './delivery-forecast'
+import { neededByDate } from './needed-by'
 import { plainText, searchTokens, truncate } from './text'
 import { expandSearchWords, type Vocabulary } from './spelling'
 import { normaliseSpokenSku, skuMatch, skuSearchDigits, type SkuMatch } from './sku'
@@ -909,6 +910,7 @@ export async function getProductDetail(
   wantedOptions: string | null = null,
   quantity: number | null = null,
   carriedFor: (productId: string) => ReadonlyMap<string, string> = () => new Map(),
+  neededByWords: string | null = null,
 ): Promise<ProductDetail | null> {
   const rows = await prisma.$queryRaw<DetailRow[]>`
     SELECT p."id", p."name", p."slug", p."sku", p."price", p."sale_price", p."short_description", p."description", p."type",
@@ -941,7 +943,9 @@ export async function getProductDetail(
   ])
   const spread = spreads.get(productId) ?? null
   const weight = numberOrNull(row.weight)
-  const deliveryByVariation = forecast ? describeForecast(forecast, config.currencySymbol, config.taxMode) : []
+  const neededDate = forecast && neededByWords ? neededByDate(neededByWords, forecast.today) : null
+  const neededBy = neededDate && neededByWords ? { date: neededDate, label: neededByWords.trim().slice(0, 40) } : null
+  const deliveryByVariation = forecast ? describeForecast(forecast, config.currencySymbol, config.taxMode, neededBy) : []
 
   return {
     ...toSummary(row, config.currencySymbol, base, spread),
@@ -972,7 +976,7 @@ export async function getProductDetail(
     deliveryServices: deliveryByVariation.length > 0 ? [] : deliveryServices,
     deliveryByVariation,
     deliveryNote: deliveryByVariation.length > 0
-      ? `Dates are the earliest delivery if ordered today (${forecast?.today}) and prices are ${priceBasis(config.taxMode)}. Each line names which options it applies to: tell the caller which options arrive soonest and what the others get. If they have not said which option they want, give the soonest and say the rest are later.`
+      ? `${neededBy ? `Each line says whether it arrives IN TIME or TOO LATE for ${neededBy.label} (${neededBy.date}): answer from that, never by comparing dates yourself. ` : ''}Dates are the earliest delivery if ordered today (${forecast?.today}) and prices are ${priceBasis(config.taxMode)}. Each line names which options it applies to: tell the caller which options arrive soonest and what the others get. If they have not said which option they want, give the soonest and say the rest are later.`
       : deliveryServices.length > 0
         ? `Delivery prices are ${priceBasis(config.taxMode)}. Times are working days, so weekends and bank holidays do not count.`
         : 'No delivery timing is published for this product. Do not guess one; offer a callback.',

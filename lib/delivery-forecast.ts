@@ -1,4 +1,5 @@
 import { formatPrice, priceBasis } from './product-format'
+import { arrivesInTime } from './needed-by'
 
 // ---------------------------------------------------------------------------
 // Delivery for a product with variations, said the way a person on the phone
@@ -159,7 +160,7 @@ export function describeScope(scope: ForecastScope): string {
   return `${scope.count} of the options`
 }
 
-function describeGroup(group: ForecastGroup, symbol: string, basis: string, single: boolean): string {
+function describeGroup(group: ForecastGroup, symbol: string, basis: string, single: boolean, neededBy: NeededBy | null): string {
   // A group with no date is one the shop's estimate refused: out of stock and
   // set not to be sold on backorder. Say that, rather than hint at a gap.
   if (!group.dateLabel) {
@@ -168,19 +169,26 @@ function describeGroup(group: ForecastGroup, symbol: string, basis: string, sing
       : `${describeScope(group)}: currently out of stock, so there is no delivery date`
   }
   const price = group.price === 0 ? 'free' : `${formatPrice(group.price, symbol)} ${basis}`
-  const when = `delivered by ${group.dateLabel}`
+  // Worked out here, never by the model (lib/needed-by.ts).
+  const timing = neededBy && group.date
+    ? arrivesInTime(group.date, neededBy.date) ? ` - IN TIME for ${neededBy.label}` : ` - TOO LATE for ${neededBy.label}`
+    : ''
+  const when = `delivered by ${group.dateLabel}${timing}`
   return single ? `${price}, ${when}` : `${describeScope(group)}: ${price}, ${when}`
 }
 
 /** What the assistant is given for a product's delivery. When every option
  *  shares one date and price it is one short line; when they differ, one line per
  *  group, so the caller can be told which colours get there first. */
-export function describeForecast(forecast: DeliveryForecast, symbol: string, taxMode: string): SpokenDeliveryService[] {
+/** The day the caller needs it by: its date (ISO) and their own words. */
+export type NeededBy = { date: string; label: string }
+
+export function describeForecast(forecast: DeliveryForecast, symbol: string, taxMode: string, neededBy: NeededBy | null = null): SpokenDeliveryService[] {
   const basis = priceBasis(taxMode)
   return forecast.services.map((service) => ({
     service: service.label,
     note: service.description,
-    options: service.groups.map((group) => describeGroup(group, symbol, basis, service.groups.length === 1 && group.all)),
+    options: service.groups.map((group) => describeGroup(group, symbol, basis, service.groups.length === 1 && group.all, neededBy)),
     notAvailableOn: service.notOfferedOn ? describeScope(service.notOfferedOn) : null,
   }))
 }

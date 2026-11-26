@@ -74,6 +74,7 @@ const ProductInput = CallIdentity.extend({
   product_id: z.string().trim().min(1).max(300),
   options: z.string().trim().max(300).optional(),
   quantity: z.number().int().positive().max(100_000).optional(),
+  needed_by: z.string().trim().max(60).optional(),
 })
 const SkuInput = CallIdentity.extend({
   sku: z.string().trim().min(1).max(80),
@@ -407,6 +408,7 @@ export async function runTool(name: ToolName, body: unknown): Promise<ToolOutcom
         blankToNull(input.data.options),
         input.data.quantity ?? null,
         (productId) => choicesInAddress(recordedEntry(recorded, productId)?.url),
+        blankToNull(input.data.needed_by),
       )
       if (detail) await rememberDiscussed(input.data, fromProductDetail(detail))
       return {

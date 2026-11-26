@@ -2,7 +2,8 @@ import { escapeHtml } from '@/lib/email/render'
 import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { sendTemplateEmail } from '@/lib/email'
 import { renderProductTable } from '@/modules/unified-inbox/lib/products/render'
-import { resolveProducts } from '@/modules/unified-inbox/lib/products'
+import { resolveProducts, type ProductChoice } from '@/modules/unified-inbox/lib/products'
+import { withDeliveryParam } from './product-links'
 import { recentEmailsFrom, recordEmailSent, saveDiscussedProducts, type CallRecord } from './calls'
 import { chosenPicks, markEmailed, productsToSend } from './discussed-products'
 import { titleCaseName } from './name-case'
@@ -72,6 +73,15 @@ export function signatureHtml(signature: string): string {
     return html ? `<div style="margin:24px 0 0;">${html}</div>` : ''
   }
   return `<p style="margin:24px 0 0;">${escapeHtml(body).replace(/\n/g, '<br>')}</p>`
+}
+
+/** A product as the email prints it: linked with its delivery service chosen
+ *  where it has one the shop still offers, so the product page opens with it
+ *  picked (Advanced Shipping reads `delivery-service` from the link). Ported
+ *  from the chat assistant. Pure. */
+export function linkWithDelivery(choice: ProductChoice): ProductChoice {
+  const key = choice.deliveryQuote?.key
+  return key ? { ...choice, url: withDeliveryParam(choice.url, key) } : choice
 }
 
 /** The note's words as the email prints them: "plus VAT" written the way the
@@ -233,7 +243,7 @@ export async function emailCallSummary(call: CallRecord, input: SummaryInput): P
     // call's own record, rather than a note with nothing in it.
     resolved = await listFor([])
   }
-  const listing = renderProductTable(resolved.map((entry) => entry.choice))
+  const listing = renderProductTable(resolved.map((entry) => linkWithDelivery(entry.choice)))
   const name = input.name?.trim() || (recipient.fromOrder ? await nameOnOrderEmail(call.verifiedOrders, recipient.email) : '') || call.callerName || ''
 
   const sent = await sendTemplateEmail(recipient.email, 'ai-call-answering.call-summary', {
